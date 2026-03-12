@@ -151,7 +151,7 @@ class DetectionResult:
 # ---------------------------------------------------------------------------
 
 
-def load_env(path: Path) -> dict[str, str]:
+def load_env(path: Path, *, required: bool = False) -> dict[str, str]:
     """Parse a .env file into a dict. Skips comments and blank lines."""
     env: dict[str, str] = {}
     if not path.is_file():
@@ -172,6 +172,9 @@ def load_env(path: Path) -> dict[str, str]:
                 value = value[1:-1]
             env[key] = value
     except OSError as exc:
+        if required:
+            print(f"Error: could not read env file: {path} ({exc})", file=sys.stderr)
+            sys.exit(1)
         log.warning("Could not read .env file %s: %s", path, exc)
     return env
 
@@ -204,15 +207,17 @@ def build_config(args: argparse.Namespace) -> Config:
 
     if args.env_file:
         env_path = Path(args.env_file)
+        if not env_path.is_absolute():
+            env_path = script_dir / env_path
         if not env_path.is_file():
             print(
-                f"Error: specified env file does not exist or is not readable: {env_path}",
+                f"Error: specified env file does not exist or is not a regular file: {env_path}",
                 file=sys.stderr,
             )
             sys.exit(1)
     else:
         env_path = script_dir / ".env"
-    env_file = load_env(env_path)
+    env_file = load_env(env_path, required=bool(args.env_file))
 
     # --- library_path ---
     library_path_str = (

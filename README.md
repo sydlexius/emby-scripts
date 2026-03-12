@@ -75,7 +75,8 @@ Settings are merged in priority order: **CLI flags > env vars > `.env` file > TO
 EMBY_API_KEY=your-key-here
 EMBY_URL=http://localhost:8096
 
-# Use --env-file .env.prod to target a different server
+# Use --env-file .env.prod to load a different env file
+# Exported EMBY_URL / EMBY_API_KEY still take precedence
 ```
 
 **`explicit_config.toml`** — word lists, library path, report output. Copy `explicit_config.example.toml` to get started. The script works without any config file using sensible defaults.
