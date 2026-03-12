@@ -1,0 +1,17 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Reports
+*.csv
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/
