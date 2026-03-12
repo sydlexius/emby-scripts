@@ -138,7 +138,7 @@ class Config:
 class DetectionResult:
     sidecar_path: Path | None
     audio_path: Path | None
-    tier: str | None  # "R", "PG-13", or None (clean)
+    tier: str | None  # "R", "PG-13", "G" (genre-matched), or None (clean)
     matched_words: list[str] = field(default_factory=list)
     emby_item_id: str | None = None
     action: str = ""  # set | cleared | skipped | already_correct | not_found_in_emby |
@@ -234,7 +234,16 @@ def build_config(args: argparse.Namespace) -> Config:
             file=sys.stderr,
         )
         sys.exit(1)
-    library_path = Path(library_path_str or ".")
+    try:
+        library_path = (
+            Path(library_path_str).expanduser() if library_path_str else Path(".")
+        )
+    except RuntimeError as exc:
+        print(
+            f"Error: cannot expand library_path {library_path_str!r}: {exc}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # --- emby_url ---
     emby_url = (
@@ -788,13 +797,13 @@ def process_library(config: Config) -> list[DetectionResult]:
                 artist=item.get("AlbumArtist", "") or "",
                 album=item.get("Album", "") or "",
             )
-            if config.dry_run:
+            if current_rating == "G":
+                dr.action = "g_genre_already_correct"
+            elif config.dry_run:
                 dr.action = "dry_run_g_genre"
                 log.info(
                     "[DRY RUN] Would set G on %s (genre: %s)", norm_path, matched_genre
                 )
-            elif current_rating == "G":
-                dr.action = "g_genre_already_correct"
             else:
                 dr.action = _apply_rating(emby, item_id, "G", norm_path)
                 if dr.action == "set":
@@ -871,7 +880,8 @@ def list_genres_mode(config: Config) -> None:
     """--list-genres mode: print all Audio genre names from Emby to stdout. Exits with non-zero status on error."""
     if not config.emby_url or not config.emby_api_key:
         print(
-            "Error: --list-genres requires EMBY_URL and EMBY_API_KEY.",
+            "Error: --list-genres requires EMBY_URL and EMBY_API_KEY "
+            "(via --emby-url/--emby-api-key, environment variables, .env file, or TOML config).",
             file=sys.stderr,
         )
         sys.exit(1)

@@ -115,7 +115,7 @@ The `--report` flag produces a CSV with columns useful for admin review:
 | `album` | From Emby metadata (`Album`), falls back to directory structure |
 | `track` | Audio filename |
 | `sidecar` | Sidecar filename |
-| `tier` | `R`, `PG-13`, or empty (clean) |
+| `tier` | `R`, `PG-13`, `G` (genre-matched), or empty (clean) |
 | `matched_words` | Semicolon-separated list of words that triggered detection |
 | `previous_rating` | What `OfficialRating` was before this run |
 | `action` | `set` · `cleared` · `already_correct` · `skipped` · `not_found_in_emby` · `emby_unavailable` · `no_audio_file` · `error` · `dry_run` · `dry_run_clear` · `g_genre` · `g_genre_already_correct` · `dry_run_g_genre` |
