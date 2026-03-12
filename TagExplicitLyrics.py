@@ -202,7 +202,16 @@ def build_config(args: argparse.Namespace) -> Config:
     )
     toml = load_toml_config(toml_path)
 
-    env_path = Path(args.env_file) if args.env_file else script_dir / ".env"
+    if args.env_file:
+        env_path = Path(args.env_file)
+        if not env_path.is_file():
+            print(
+                f"Error: specified env file does not exist or is not readable: {env_path}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        env_path = script_dir / ".env"
     env_file = load_env(env_path)
 
     # --- library_path ---
@@ -501,19 +510,31 @@ def _normalize_path(p: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _path_parts(audio_path: Path | None) -> tuple[str, str]:
-    """Fallback: extract artist and album from Artist/Album/Track path layout."""
+def _path_parts(
+    audio_path: Path | None, library_path: Path | None = None
+) -> tuple[str, str]:
+    """Best-effort fallback using the path relative to the library root."""
     if audio_path is None:
         return "", ""
-    parts = audio_path.parts
+    if library_path is not None:
+        try:
+            parts = audio_path.relative_to(library_path).parts
+        except ValueError:
+            parts = audio_path.parts
+    else:
+        parts = audio_path.parts
+    # Artist/Album/Track (3+ segments) → (artist, album)
     if len(parts) >= 3:
         return parts[-3], parts[-2]
-    if len(parts) >= 2:
-        return parts[-2], ""
+    # Album/Track (2 segments) → (empty, album)
+    if len(parts) == 2:
+        return "", parts[-2]
     return "", ""
 
 
-def write_report(results: list[DetectionResult], path: Path) -> None:
+def write_report(
+    results: list[DetectionResult], path: Path, library_path: Path | None = None
+) -> None:
     """Write detection results to a CSV file."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -532,7 +553,7 @@ def write_report(results: list[DetectionResult], path: Path) -> None:
                 ]
             )
             for r in results:
-                path_artist, path_album = _path_parts(r.audio_path)
+                path_artist, path_album = _path_parts(r.audio_path, library_path)
                 artist = r.artist or path_artist
                 album = r.album or path_album
                 track = (r.audio_path or r.sidecar_path or Path()).name
@@ -873,7 +894,7 @@ def main() -> None:
         results = process_library(config)
 
     if config.report_path:
-        write_report(results, config.report_path)
+        write_report(results, config.report_path, config.library_path)
 
     print_summary(results)
 

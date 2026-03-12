@@ -6,7 +6,7 @@
 # Environment files:
 #   The script loads .env from the script directory by default.
 #   Use --env-file to load a different file (e.g. --env-file .env.prod).
-#   Required vars: EMBY_API_KEY, EMBY_URL
+#   To connect to Emby and apply ratings, set EMBY_API_KEY and EMBY_URL in your .env.
 
 [general]
 # A single library path. To scan multiple libraries, run the script once per

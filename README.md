@@ -70,7 +70,7 @@ Options:
 Settings are merged in priority order: **CLI flags > env vars > `.env` file > TOML config > hardcoded defaults**.
 
 **`.env`** — secrets only (one per environment):
-```
+```bash
 # .env — local dev
 EMBY_API_KEY=your-key-here
 EMBY_URL=http://localhost:8096
@@ -108,6 +108,6 @@ This lets an admin spot false positives caused by lyric transcription errors (e.
 ### Emby API Notes
 
 - Auth: `X-Emby-Token` header on every request
-- Item listing: `GET /Items?Recursive=true&IncludeItemTypes=Audio&Fields=Path,OfficialRating` (paginated)
+- Item listing: `GET /Items?Recursive=true&IncludeItemTypes=Audio&Fields=Path,OfficialRating,AlbumArtist,Album` (paginated)
 - Item fetch: `GET /Users/{userId}/Items/{itemId}` (user-scoped; `GET /Items/{id}` returns 404)
 - Item update: `POST /Items/{itemId}` with the full item body (GET-then-POST round-trip preserves existing metadata)
