@@ -488,8 +488,8 @@ class EmbyClient:
 
 
 def _normalize_path(p: str) -> str:
-    """Normalize a path for cross-platform dict lookup."""
-    return os.path.normcase(os.path.normpath(p))
+    """Normalize a path for dict lookup, handling mixed separators."""
+    return os.path.normcase(os.path.normpath(p)).replace("\\", "/")
 
 
 # ---------------------------------------------------------------------------
@@ -511,35 +511,40 @@ def _path_parts(audio_path: Path | None) -> tuple[str, str]:
 
 def write_report(results: list[DetectionResult], path: Path) -> None:
     """Write detection results to a CSV file."""
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(
-            [
-                "artist",
-                "album",
-                "track",
-                "sidecar",
-                "tier",
-                "matched_words",
-                "previous_rating",
-                "action",
-            ]
-        )
-        for r in results:
-            artist, album = _path_parts(r.audio_path)
-            track = r.audio_path.name if r.audio_path else r.sidecar_path.name
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
             writer.writerow(
                 [
-                    artist,
-                    album,
-                    track,
-                    str(r.sidecar_path),
-                    r.tier or "",
-                    "; ".join(r.matched_words),
-                    r.previous_rating,
-                    r.action,
+                    "artist",
+                    "album",
+                    "track",
+                    "sidecar",
+                    "tier",
+                    "matched_words",
+                    "previous_rating",
+                    "action",
                 ]
             )
+            for r in results:
+                artist, album = _path_parts(r.audio_path)
+                track = r.audio_path.name if r.audio_path else r.sidecar_path.name
+                writer.writerow(
+                    [
+                        artist,
+                        album,
+                        track,
+                        str(r.sidecar_path),
+                        r.tier or "",
+                        "; ".join(r.matched_words),
+                        r.previous_rating,
+                        r.action,
+                    ]
+                )
+    except OSError as exc:
+        log.error("Cannot write report to %s: %s", path, exc)
+        return
     log.info("Report written to %s", path)
 
 
@@ -550,6 +555,13 @@ def write_report(results: list[DetectionResult], path: Path) -> None:
 
 def process_library(config: Config) -> list[DetectionResult]:
     """Main flow: scan sidecars -> detect -> update Emby."""
+    lp = config.library_path
+    if not lp.exists():
+        log.error("library_path does not exist: %s", lp)
+        sys.exit(1)
+    if not lp.is_dir():
+        log.error("library_path is not a directory: %s", lp)
+        sys.exit(1)
     pairs = scan_library(config.library_path)
 
     # Prefetch Emby items for path matching (even in dry-run, we read but don't write)
