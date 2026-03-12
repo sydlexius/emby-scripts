@@ -79,8 +79,8 @@ pre-commit run --all-files
 - Item updates require the full item body: `POST /Items/{id}` with the complete JSON from the GET
 
 ### Configuration
-- Secrets (API key, URL) go in `../.env` (repo root) — never in TOML or committed files
-- Use `--env-file ../.env.prod` to target the production server
+- Secrets (API key, URL) go in `.env` at the repo root — never in TOML or committed files
+- Use `--env-file .env.prod` to target the production server
 - Word lists, library path, and genre allow-list go in `explicit_config.toml` (copy from `explicit_config.example.toml`)
 - Only `explicit_config.example.toml` is committed; all other TOML variants are gitignored
 
