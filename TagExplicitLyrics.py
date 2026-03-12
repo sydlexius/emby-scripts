@@ -881,7 +881,8 @@ def list_genres_mode(config: Config) -> None:
     if not config.emby_url or not config.emby_api_key:
         print(
             "Error: --list-genres requires EMBY_URL and EMBY_API_KEY "
-            "(via --emby-url/--emby-api-key, environment variables, .env file, or TOML config).",
+            "(via --emby-url/--emby-api-key, environment variables, or .env file; "
+            "EMBY_URL may also be set via [emby].url in the TOML config).",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1036,6 +1037,7 @@ def print_summary(results: list[DetectionResult]) -> None:
     g_genre_already = sum(
         1 for r in genre_results if r.action == "g_genre_already_correct"
     )
+    g_genre_dry = sum(1 for r in genre_results if r.action == "dry_run_g_genre")
 
     print()
     print("=== Explicit Lyrics Scan Complete ===")
@@ -1049,9 +1051,11 @@ def print_summary(results: list[DetectionResult]) -> None:
     print(f"  Ratings set:         {rated}")
     print(f"  Already correct:     {already}")
     print(f"  Ratings cleared:     {cleared}")
-    if g_genre_rated or g_genre_already:
+    if g_genre_rated or g_genre_already or g_genre_dry:
         print(f"  G (genre-matched):   {g_genre_rated}")
         print(f"  Already G (genre):   {g_genre_already}")
+        if g_genre_dry:
+            print(f"  Dry-run G (genre):   {g_genre_dry}")
     if emby_unavail:
         print(f"  Emby unavailable:    {emby_unavail}")
     if dry:
