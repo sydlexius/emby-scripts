@@ -67,8 +67,9 @@ Positional:
 Options:
   --config PATH             TOML config file (default: explicit_config.toml in script dir)
   --env-file PATH           .env file to load (default: .env in repo root; e.g. --env-file .env.prod)
-  --server-type TYPE        'emby' or 'jellyfin' — auto-detected from env vars when only
-                            one server is configured; required when both are configured
+  --server-type TYPE        'emby' or 'jellyfin' — auto-detected from configured server URLs
+                            (env vars or TOML) when only one server is active; can also be
+                            set via SERVER_TYPE env var or [general].server_type in TOML
   --server-url URL          Server URL — overrides the env var for the active server type
   --api-key KEY             API key — overrides the env var for the active server type
   -n, --dry-run             Analyze only, no server updates

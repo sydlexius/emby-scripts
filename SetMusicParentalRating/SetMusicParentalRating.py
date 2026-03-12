@@ -270,7 +270,7 @@ def build_config(args: argparse.Namespace) -> Config:
             (getattr(args, "server_type", None) or "")
             or os.environ.get("SERVER_TYPE", "")
             or env_file.get("SERVER_TYPE", "")
-            or toml.get("general", {}).get("server_type", "")
+            or str(toml.get("general", {}).get("server_type", "") or "")
         )
         .lower()
         .strip()
@@ -1159,7 +1159,12 @@ def main() -> None:
 
     setup_logging(args.verbose)
 
-    config = build_config(args)
+    # ValueError is raised by Config.__post_init__ for invalid field values
+    # (e.g. unrecognised server_type). Other config errors call sys.exit() directly.
+    try:
+        config = build_config(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     if args.list_genres:
         list_genres_mode(config)
