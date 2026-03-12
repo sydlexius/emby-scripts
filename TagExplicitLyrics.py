@@ -32,20 +32,18 @@ except ModuleNotFoundError:
 # Constants
 # ---------------------------------------------------------------------------
 
-AUDIO_EXTENSIONS = frozenset(
-    {
-        ".flac",
-        ".mp3",
-        ".m4a",
-        ".ogg",
-        ".opus",
-        ".wma",
-        ".wav",
-        ".aac",
-        ".alac",
-        ".wv",
-        ".ape",
-    }
+AUDIO_EXTENSIONS = (
+    ".flac",
+    ".mp3",
+    ".m4a",
+    ".ogg",
+    ".opus",
+    ".wma",
+    ".wav",
+    ".aac",
+    ".alac",
+    ".wv",
+    ".ape",
 )
 SIDECAR_EXTENSIONS = frozenset({".lrc", ".txt"})
 
@@ -346,8 +344,8 @@ def detect_stems(
         stem_l = stem.lower()
         for word in word_tokens:
             if stem_l in word:
-                # Check false positives bidirectionally
-                is_fp = any(word in fp or fp in word for fp in fp_lower)
+                # Check if the matched word is (or contains) a false positive
+                is_fp = any(fp in word for fp in fp_lower)
                 if not is_fp:
                     matched.append(word)
                     break  # one match per stem is enough
