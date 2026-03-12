@@ -6,7 +6,7 @@ Standalone Python utilities for managing an [Emby](https://emby.media/) media se
 
 | Script | Description |
 |--------|-------------|
-| [TagExplicitLyrics](TagExplicitLyrics/) | Scans sidecar lyric files for explicit content and sets `OfficialRating` on matching audio tracks via the Emby API |
+| [SetMusicParentalRating](SetMusicParentalRating/) | Scans sidecar lyric files for explicit content and sets `OfficialRating` on matching audio tracks via the Emby or Jellyfin API |
 
 ## Setup
 

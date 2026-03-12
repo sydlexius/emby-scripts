@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Scan sidecar lyric files for explicit content and set OfficialRating on
-matching tracks via the Emby API.
+"""SetMusicParentalRating — scan sidecar lyric files for explicit content and
+set OfficialRating on matching audio tracks via the Emby or Jellyfin API.
 
 Python 3.11+ recommended (uses tomllib from stdlib).
 On older Python, falls back to the tomli package.
@@ -101,8 +101,8 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-class EmbyAPIError(Exception):
-    """Raised when an Emby API call fails."""
+class MediaServerError(Exception):
+    """Raised when a media server API call fails."""
 
 
 # ---------------------------------------------------------------------------
@@ -453,8 +453,8 @@ def match_g_genre(item: dict, g_genres: list[str]) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-class EmbyClient:
-    """Minimal Emby HTTP client using urllib (stdlib)."""
+class MediaServerClient:
+    """Minimal Emby/Jellyfin HTTP client using urllib (stdlib)."""
 
     def __init__(self, base_url: str, api_key: str) -> None:
         self.base_url = base_url.rstrip("/")
@@ -481,7 +481,7 @@ class EmbyClient:
                     try:
                         return json.loads(resp_data)
                     except json.JSONDecodeError as exc:
-                        raise EmbyAPIError(
+                        raise MediaServerError(
                             f"Non-JSON response on {method} {path}: {resp_data[:200]!r}"
                         ) from exc
                 return None
@@ -491,11 +491,11 @@ class EmbyClient:
                 body_snippet = exc.read().decode("utf-8", errors="replace")[:1024]
             except Exception as inner_exc:
                 log.debug("Could not read HTTP error body: %s", inner_exc)
-            raise EmbyAPIError(
+            raise MediaServerError(
                 f"HTTP {exc.code} on {method} {path}: {body_snippet}"
             ) from exc
         except urllib.error.URLError as exc:
-            raise EmbyAPIError(
+            raise MediaServerError(
                 f"Connection error on {method} {path}: {exc.reason}"
             ) from exc
 
@@ -533,10 +533,10 @@ class EmbyClient:
         if self._user_id is None:
             users = self._request("GET", "/Users")
             if not users:
-                raise EmbyAPIError("No users returned from /Users")
+                raise MediaServerError("No users returned from /Users")
             user_id = users[0].get("Id")
             if not user_id:
-                raise EmbyAPIError("First user has no 'Id' field")
+                raise MediaServerError("First user has no 'Id' field")
             self._user_id = user_id
             log.debug("Using Emby user ID: %s", self._user_id)
         return self._user_id
@@ -546,7 +546,9 @@ class EmbyClient:
         uid = self._get_user_id()
         result = self._request("GET", f"/Users/{uid}/Items/{item_id}")
         if result is None:
-            raise EmbyAPIError(f"Empty response for GET /Users/{uid}/Items/{item_id}")
+            raise MediaServerError(
+                f"Empty response for GET /Users/{uid}/Items/{item_id}"
+            )
         return result
 
     def update_item(self, item_id: str, item_body: dict) -> None:
@@ -564,7 +566,7 @@ class EmbyClient:
             log.warning("list_genres: Emby returned an empty response body")
             return []
         if not isinstance(result, dict):
-            raise EmbyAPIError(
+            raise MediaServerError(
                 f"list_genres: unexpected response type {type(result).__name__!r}; "
                 "expected a JSON object"
             )
@@ -576,7 +578,7 @@ class EmbyClient:
             )
             return []
         if not isinstance(items, list):
-            raise EmbyAPIError(
+            raise MediaServerError(
                 f"list_genres: 'Items' field is {type(items).__name__!r}, expected a list"
             )
         non_dict = sum(1 for item in items if not isinstance(item, dict))
@@ -687,13 +689,13 @@ def process_library(config: Config) -> list[DetectionResult]:
     pairs = scan_library(config.library_path)
 
     # Prefetch Emby items for path matching (even in dry-run, we read but don't write)
-    emby: EmbyClient | None = None
+    emby: MediaServerClient | None = None
     emby_items: dict[str, dict] = {}
     if config.emby_url and config.emby_api_key:
-        emby = EmbyClient(config.emby_url, config.emby_api_key)
+        emby = MediaServerClient(config.emby_url, config.emby_api_key)
         try:
             emby_items = emby.prefetch_audio_items()
-        except EmbyAPIError as exc:
+        except MediaServerError as exc:
             log.error("Failed to prefetch Emby items: %s", exc)
             log.error("Continuing in analysis-only mode")
             emby = None
@@ -844,10 +846,10 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
         sys.exit(1)
 
     target = config.force_rating
-    emby = EmbyClient(config.emby_url, config.emby_api_key)
+    emby = MediaServerClient(config.emby_url, config.emby_api_key)
     try:
         all_items = emby.prefetch_audio_items()
-    except EmbyAPIError as exc:
+    except MediaServerError as exc:
         log.error("Failed to prefetch Emby items: %s", exc)
         sys.exit(1)
 
@@ -901,10 +903,10 @@ def list_genres_mode(config: Config) -> None:
             file=sys.stderr,
         )
         sys.exit(1)
-    emby = EmbyClient(config.emby_url, config.emby_api_key)
+    emby = MediaServerClient(config.emby_url, config.emby_api_key)
     try:
         genres = emby.list_genres()
-    except EmbyAPIError as exc:
+    except MediaServerError as exc:
         log.error("Failed to retrieve genres from Emby: %s", exc)
         sys.exit(1)
     print("=== Audio Genres ===")
@@ -915,7 +917,7 @@ def list_genres_mode(config: Config) -> None:
 
 
 def _apply_rating(
-    emby: EmbyClient | None,
+    emby: MediaServerClient | None,
     item_id: str,
     rating: str,
     label: str,
@@ -933,7 +935,7 @@ def _apply_rating(
         verb = "Cleared rating from" if not rating else f"Set {rating} on"
         log.info("%s %s", verb, label)
         return "set"
-    except EmbyAPIError as exc:
+    except MediaServerError as exc:
         log.error("Failed to update %s: %s", label, exc)
         return "error"
 
@@ -945,9 +947,9 @@ def _apply_rating(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="TagExplicitLyrics",
+        prog="SetMusicParentalRating",
         description="Scan sidecar lyric files for explicit content and set "
-        "OfficialRating on matching tracks via the Emby API.",
+        "OfficialRating on matching tracks via the Emby or Jellyfin API.",
     )
     parser.add_argument(
         "library_path",
