@@ -134,7 +134,7 @@ class Config:
 
 @dataclass
 class DetectionResult:
-    sidecar_path: Path
+    sidecar_path: Path | None
     audio_path: Path | None
     tier: str | None  # "R", "PG-13", or None (clean)
     matched_words: list[str] = field(default_factory=list)
@@ -205,8 +205,8 @@ def build_config(args: argparse.Namespace) -> Config:
     # --- library_path ---
     library_path_str = (
         args.library_path
-        or os.environ.get("LIBRARY_PATH")
-        or env_file.get("LIBRARY_PATH")
+        or os.environ.get("TAGLRC_LIBRARY_PATH")
+        or env_file.get("TAGLRC_LIBRARY_PATH")
         or toml.get("general", {}).get("library_path")
     )
     if not library_path_str:
@@ -529,13 +529,13 @@ def write_report(results: list[DetectionResult], path: Path) -> None:
             )
             for r in results:
                 artist, album = _path_parts(r.audio_path)
-                track = r.audio_path.name if r.audio_path else r.sidecar_path.name
+                track = (r.audio_path or r.sidecar_path or Path()).name
                 writer.writerow(
                     [
                         artist,
                         album,
                         track,
-                        str(r.sidecar_path),
+                        str(r.sidecar_path) if r.sidecar_path else "",
                         r.tier or "",
                         "; ".join(r.matched_words),
                         r.previous_rating,
@@ -689,7 +689,7 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
         item_id = item.get("Id", "")
         current = item.get("OfficialRating", "") or ""
         dr = DetectionResult(
-            sidecar_path=Path(norm_path),
+            sidecar_path=None,
             audio_path=Path(norm_path),
             tier=target,
             emby_item_id=item_id,
