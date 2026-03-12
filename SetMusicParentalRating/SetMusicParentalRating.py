@@ -155,7 +155,7 @@ class DetectionResult:
     previous_rating: str = ""
     artist: str = ""
     album: str = ""
-    source: str = "sidecar"  # "sidecar" | "embedded" | "genre"
+    source: str = ""  # "sidecar" | "embedded" | "genre" | "force"
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +366,9 @@ def build_config(args: argparse.Namespace) -> Config:
         force_rating=args.force_rating,
         report_path=report_path,
         g_genres=g_genres,
-        embedded_lyrics=args.embedded_lyrics or embedded_lyrics,
+        embedded_lyrics=embedded_lyrics
+        if args.embedded_lyrics is None
+        else args.embedded_lyrics,
     )
 
 
@@ -447,9 +449,15 @@ def extract_embedded_lyrics(item: dict) -> str:
                 continue
             if stream.get("Type") != "Subtitle":
                 continue
-            extradata = stream.get("Extradata") or ""
-            if extradata:
+            extradata = stream.get("Extradata")
+            if isinstance(extradata, str) and extradata.strip():
                 fragments.append(extradata)
+            elif extradata is not None:
+                log.debug(
+                    "Unexpected Extradata type %s in MediaStream (track: %s); skipping",
+                    type(extradata).__name__,
+                    item.get("Path", "<unknown>"),
+                )
     if not fragments:
         return ""
     return strip_lrc_tags("\n".join(fragments))
@@ -817,6 +825,7 @@ def process_library(config: Config) -> list[DetectionResult]:
             audio_path=audio,
             tier=tier,
             matched_words=matched,
+            source="sidecar",
         )
 
         if tier:
@@ -916,6 +925,10 @@ def process_library(config: Config) -> list[DetectionResult]:
             tier, matched = classify_lyrics(text, config)
             item_id = item.get("Id", "")
             if not item_id:
+                log.warning(
+                    "Embedded-lyrics pass: server item at %s has no 'Id' field; skipping",
+                    norm_path,
+                )
                 continue
             dr = DetectionResult(
                 sidecar_path=None,
@@ -1048,6 +1061,7 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
             previous_rating=current,
             artist=item.get("AlbumArtist", "") or "",
             album=item.get("Album", "") or "",
+            source="force",
         )
         if not item_id:
             dr.action = "not_found_in_server"
@@ -1197,7 +1211,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--embedded-lyrics",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Fall back to embedded tag lyrics when no sidecar file exists (default: off)",
     )
     return parser
@@ -1213,7 +1228,7 @@ def setup_logging(verbose: bool) -> None:
 
 
 def print_summary(results: list[DetectionResult]) -> None:
-    sidecar_results = [
+    scan_results = [
         r
         for r in results
         if r.source in ("sidecar", "embedded") or r.action == "no_audio_file"
@@ -1223,16 +1238,20 @@ def print_summary(results: list[DetectionResult]) -> None:
         for r in results
         if r.action in ("g_genre", "g_genre_already_correct", "dry_run_g_genre")
     ]
-    total = len(sidecar_results)
-    r_count = sum(1 for r in sidecar_results if r.tier == "R")
-    pg13_count = sum(1 for r in sidecar_results if r.tier == "PG-13")
-    clean = sum(1 for r in sidecar_results if r.tier is None)
+    sidecar_count = sum(
+        1 for r in scan_results if r.source == "sidecar" or r.action == "no_audio_file"
+    )
+    embedded_count = sum(1 for r in scan_results if r.source == "embedded")
+    total = len(scan_results)
+    r_count = sum(1 for r in scan_results if r.tier == "R")
+    pg13_count = sum(1 for r in scan_results if r.tier == "PG-13")
+    clean = sum(1 for r in scan_results if r.tier is None)
     audio_found = sum(
         1
-        for r in sidecar_results
+        for r in scan_results
         if r.audio_path is not None and r.action != "no_audio_file"
     )
-    server_matched = sum(1 for r in sidecar_results if r.server_item_id)
+    server_matched = sum(1 for r in scan_results if r.server_item_id)
     rated = sum(1 for r in results if r.action == "set")
     already = sum(1 for r in results if r.action == "already_correct")
     cleared = sum(1 for r in results if r.action == "cleared")
@@ -1248,8 +1267,7 @@ def print_summary(results: list[DetectionResult]) -> None:
     print()
     print("=== Explicit Lyrics Scan Complete ===")
     if total:
-        print(f"  Sidecars scanned:    {total}")
-        embedded_count = sum(1 for r in sidecar_results if r.source == "embedded")
+        print(f"  Sidecars scanned:    {sidecar_count}")
         if embedded_count:
             print(f"  From embedded tags:  {embedded_count}")
         print(f"    R-rated:           {r_count}")

@@ -12,8 +12,8 @@ Scans sidecar lyric files (`.lrc`, `.txt`) for explicit content and sets `Offici
 2. Matches each sidecar to its audio file by filename stem
 3. Strips LRC timestamps/metadata to extract plain lyric text
 4. Runs tiered word detection against configurable word lists:
-   - **R** — strong profanity (stem matching: `fuck`, `shit`, etc.)
-   - **PG-13** — moderate profanity (stem matching: `bitch`, `whore`, etc.)
+   - **R** — strong profanity (stem matching against a configurable word list)
+   - **PG-13** — moderate profanity (stem matching against a configurable word list)
 5. Looks up the audio file in the media server via a bulk prefetch of all Audio items
 6. Sets `OfficialRating` on the item via a GET-then-POST round-trip
 7. *(Optional)* Genre pass: any audio item whose `Genres` field contains an entry from `[detection.g_genres]` and has no matching sidecar receives a `G` rating
@@ -116,7 +116,7 @@ Run `--list-genres` to see all genre strings present in your library.
 
 ### Detection Details
 
-**Stem matching** checks if a stem (e.g., `fuck`) appears as a substring of any word token. This catches conjugations and compounds (`fucking`, `motherfucker`). A bidirectional false-positive filter prevents words like `cocktail`, `circumstance`, and `cucumber` from triggering.
+**Stem matching** checks if a configured stem appears as a substring of any word token. This catches conjugations and compounds (e.g., a stem match on a base word also catches its suffixed forms). A bidirectional false-positive filter prevents common words that happen to contain the stem from triggering.
 
 **Exact matching** uses word-boundary regex for terms that would cause too many false positives as stems (e.g., `hoe`, `piss`).
 
