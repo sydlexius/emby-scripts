@@ -21,7 +21,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install ruff
-        run: pip install ruff
+        run: pip install ruff==0.15.5
 
       - name: Run ruff check
         run: ruff check .
@@ -42,6 +42,9 @@ jobs:
       - name: Verify imports
         run: python -c "import TagExplicitLyrics"
 
+      - name: Install pytest
+        run: pip install pytest
+
       - name: Run tests
         run: python -m pytest tests/ -v --tb=short
-        if: hashFiles('tests/') != ''
+        if: hashFiles('tests/**') != ''

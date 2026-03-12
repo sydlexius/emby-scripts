@@ -1,5 +1,5 @@
 [general]
-library_path = "D:/Music"
+library_path = ""  # Set to your music library root
 
 [emby]
 url = "http://localhost:8096"
@@ -19,7 +19,6 @@ false_positives = [
     "cockatiel",
     "cocktail",
     "hancock",
-    "shitake",
     "dickens",
     "dickson",
     "scunthorpe",

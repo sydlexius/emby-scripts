@@ -78,7 +78,6 @@ DEFAULT_FALSE_POSITIVES: list[str] = [
     "cockatiel",
     "cocktail",
     "hancock",
-    "shitake",
     "dickens",
     "dickson",
     "scunthorpe",
@@ -194,7 +193,7 @@ def load_toml_config(path: Path) -> dict:
 
 
 def build_config(args: argparse.Namespace) -> Config:
-    """Merge config layers: defaults -> TOML -> .env -> os.environ -> CLI."""
+    """Merge config layers with precedence: CLI > os.environ > .env > TOML > defaults."""
     script_dir = Path(__file__).resolve().parent
     toml_path = (
         Path(args.config) if args.config else script_dir / "explicit_config.toml"
@@ -373,7 +372,7 @@ def classify_lyrics(text: str, config: Config) -> tuple[str | None, list[str]]:
     r_stem_hits = detect_stems(word_tokens, config.r_stems, config.false_positives)
     r_exact_hits = detect_exact(text, config._r_exact_patterns)
     if r_stem_hits or r_exact_hits:
-        return "R", r_stem_hits + r_exact_hits
+        return "R", list(dict.fromkeys(r_stem_hits + r_exact_hits))
 
     # Then PG-13
     pg13_stem_hits = detect_stems(
@@ -381,7 +380,7 @@ def classify_lyrics(text: str, config: Config) -> tuple[str | None, list[str]]:
     )
     pg13_exact_hits = detect_exact(text, config._pg13_exact_patterns)
     if pg13_stem_hits or pg13_exact_hits:
-        return "PG-13", pg13_stem_hits + pg13_exact_hits
+        return "PG-13", list(dict.fromkeys(pg13_stem_hits + pg13_exact_hits))
 
     return None, []
 
@@ -467,7 +466,10 @@ class EmbyClient:
             users = self._request("GET", "/Users")
             if not users:
                 raise EmbyAPIError("No users returned from /Users")
-            self._user_id = users[0]["Id"]
+            user_id = users[0].get("Id")
+            if not user_id:
+                raise EmbyAPIError("First user has no 'Id' field")
+            self._user_id = user_id
             log.debug("Using Emby user ID: %s", self._user_id)
         return self._user_id
 
