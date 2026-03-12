@@ -666,7 +666,10 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
     """--force-rating mode: set a fixed rating on ALL audio tracks under the
     library path, skipping tracks already at the target rating."""
     if not config.emby_url or not config.emby_api_key:
-        log.error("--force-rating requires --emby-url and EMBY_API_KEY")
+        log.error(
+            "--force-rating requires an Emby URL and API key "
+            "(via --emby-url/EMBY_URL and --emby-api-key/EMBY_API_KEY, .env, or TOML config)"
+        )
         sys.exit(1)
 
     target = config.force_rating
