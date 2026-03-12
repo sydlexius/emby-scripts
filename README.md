@@ -55,6 +55,7 @@ Positional:
 
 Options:
   --config PATH             TOML config file (default: explicit_config.toml)
+  --env-file PATH           .env file to load (default: .env; e.g. .env.prod)
   --emby-url URL            Emby server URL
   --emby-api-key KEY        Emby API key
   -n, --dry-run             Analyze only, no Emby updates
@@ -68,13 +69,16 @@ Options:
 
 Settings are merged in priority order: **CLI flags > env vars > `.env` file > TOML config > hardcoded defaults**.
 
-**`.env`** — secrets only:
+**`.env`** — secrets only (one per environment):
 ```
+# .env — local dev
 EMBY_API_KEY=your-key-here
 EMBY_URL=http://localhost:8096
+
+# Use --env-file .env.prod to target a different server
 ```
 
-**`explicit_config.toml`** — word lists, library path, report output. See the included example file. The script works without any config file using sensible defaults.
+**`explicit_config.toml`** — word lists, library path, report output. Copy `explicit_config.example.toml` to get started. The script works without any config file using sensible defaults.
 
 ### Detection Details
 
@@ -90,8 +94,8 @@ The `--report` flag produces a CSV with columns useful for admin review:
 
 | Column | Description |
 |--------|-------------|
-| `artist` | Derived from directory structure (Artist/Album/Track) |
-| `album` | Derived from directory structure |
+| `artist` | From Emby metadata (`AlbumArtist`), falls back to directory structure |
+| `album` | From Emby metadata (`Album`), falls back to directory structure |
 | `track` | Audio filename |
 | `sidecar` | Sidecar filename |
 | `tier` | `R`, `PG-13`, or empty (clean) |
