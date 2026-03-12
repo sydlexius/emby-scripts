@@ -88,6 +88,10 @@ class Config:
     force_rating: str | None = None
     report_path: Path | None = None
 
+    def __post_init__(self) -> None:
+        self._r_exact_patterns = _compile_exact_patterns(self.r_exact)
+        self._pg13_exact_patterns = _compile_exact_patterns(self.pg13_exact)
+
 
 @dataclass
 class DetectionResult:
@@ -96,7 +100,8 @@ class DetectionResult:
     tier: str | None  # "R", "PG-13", or None (clean)
     matched_words: list[str] = field(default_factory=list)
     emby_item_id: str | None = None
-    action: str = ""  # "set", "cleared", "skipped", "not_found_in_emby", "error", "already_correct"
+    action: str = ""  # set | cleared | skipped | already_correct | not_found_in_emby |
+    #                    error | no_audio_file | dry_run | dry_run_clear
     previous_rating: str = ""
 
 
@@ -298,14 +303,14 @@ def detect_stems(
     return matched
 
 
-def detect_exact(text: str, exact_words: list[str]) -> list[str]:
-    """Word-boundary regex match for exact words."""
-    matched: list[str] = []
-    for word in exact_words:
-        pattern = re.compile(r"\b" + re.escape(word) + r"\b", re.IGNORECASE)
-        if pattern.search(text):
-            matched.append(word)
-    return matched
+def _compile_exact_patterns(words: list[str]) -> list[tuple[str, re.Pattern[str]]]:
+    """Precompile word-boundary regexes for exact matching."""
+    return [(w, re.compile(r"\b" + re.escape(w) + r"\b", re.IGNORECASE)) for w in words]
+
+
+def detect_exact(text: str, patterns: list[tuple[str, re.Pattern[str]]]) -> list[str]:
+    """Word-boundary regex match using precompiled patterns."""
+    return [word for word, pat in patterns if pat.search(text)]
 
 
 def classify_lyrics(text: str, config: Config) -> tuple[str | None, list[str]]:
@@ -317,13 +322,13 @@ def classify_lyrics(text: str, config: Config) -> tuple[str | None, list[str]]:
 
     # Check R tier first
     r_stem_hits = detect_stems(word_tokens, config.r_stems, config.false_positives)
-    r_exact_hits = detect_exact(text, config.r_exact)
+    r_exact_hits = detect_exact(text, config._r_exact_patterns)
     if r_stem_hits or r_exact_hits:
         return "R", r_stem_hits + r_exact_hits
 
     # Then PG-13
     pg13_stem_hits = detect_stems(word_tokens, config.pg13_stems, config.false_positives)
-    pg13_exact_hits = detect_exact(text, config.pg13_exact)
+    pg13_exact_hits = detect_exact(text, config._pg13_exact_patterns)
     if pg13_stem_hits or pg13_exact_hits:
         return "PG-13", pg13_stem_hits + pg13_exact_hits
 
@@ -464,7 +469,7 @@ def write_report(results: list[DetectionResult], path: Path) -> None:
                 artist,
                 album,
                 track,
-                r.sidecar_path.name,
+                str(r.sidecar_path),
                 r.tier or "",
                 "; ".join(r.matched_words),
                 r.previous_rating,
@@ -492,6 +497,7 @@ def process_library(config: Config) -> list[DetectionResult]:
         except EmbyAPIError as exc:
             log.error("Failed to prefetch Emby items: %s", exc)
             log.error("Continuing in analysis-only mode")
+            emby = None
 
     results: list[DetectionResult] = []
 
@@ -581,11 +587,11 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
         log.error("Failed to prefetch Emby items: %s", exc)
         sys.exit(1)
 
-    # Filter to items under the library path
-    lib_prefix = _normalize_path(str(config.library_path))
+    # Filter to items under the library path (path-aware, avoids /music matching /music2)
+    lib_root = Path(_normalize_path(str(config.library_path)))
     items_in_scope = {
         path: item for path, item in all_items.items()
-        if path.startswith(lib_prefix)
+        if Path(path).is_relative_to(lib_root)
     }
     log.info(
         "Force-rating: %d items under %s (of %d total)",
