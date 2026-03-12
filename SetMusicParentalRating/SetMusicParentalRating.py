@@ -128,6 +128,7 @@ class Config:
     force_rating: str | None = None
     report_path: Path | None = None
     g_genres: list[str] = field(default_factory=list)
+    embedded_lyrics: bool = False
 
     def __post_init__(self) -> None:
         if self.server_type not in ("emby", "jellyfin"):
@@ -154,6 +155,7 @@ class DetectionResult:
     previous_rating: str = ""
     artist: str = ""
     album: str = ""
+    source: str = "sidecar"  # "sidecar" | "embedded" | "genre"
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +345,7 @@ def build_config(args: argparse.Namespace) -> Config:
         "false_positives", list(DEFAULT_FALSE_POSITIVES)
     )
     g_genres = det.get("g_genres", {}).get("genres", [])
+    embedded_lyrics = det.get("embedded_lyrics", False)
 
     # --- report ---
     report_path_str = args.report or toml.get("report", {}).get("output_path")
@@ -363,6 +366,7 @@ def build_config(args: argparse.Namespace) -> Config:
         force_rating=args.force_rating,
         report_path=report_path,
         g_genres=g_genres,
+        embedded_lyrics=args.embedded_lyrics or embedded_lyrics,
     )
 
 
@@ -427,6 +431,28 @@ def parse_sidecar(path: Path) -> str:
         log.warning("Could not read sidecar %s: %s", path, exc)
         return ""
     return strip_lrc_tags(raw)
+
+
+def extract_embedded_lyrics(item: dict) -> str:
+    """Extract embedded lyrics text from an Emby item's MediaSources.
+
+    Looks for internal Subtitle streams (IsExternal=False, Type='Subtitle')
+    and returns their Extradata joined with newlines, stripped of LRC tags.
+    Returns "" if no embedded lyrics are found.
+    """
+    fragments: list[str] = []
+    for source in item.get("MediaSources") or []:
+        for stream in source.get("MediaStreams") or []:
+            if stream.get("IsExternal", True):
+                continue
+            if stream.get("Type") != "Subtitle":
+                continue
+            extradata = stream.get("Extradata") or ""
+            if extradata:
+                fragments.append(extradata)
+    if not fragments:
+        return ""
+    return strip_lrc_tags("\n".join(fragments))
 
 
 # ---------------------------------------------------------------------------
@@ -561,8 +587,17 @@ class MediaServerClient:
                 f"Connection error on {method} {path}: {exc.reason}"
             ) from exc
 
-    def prefetch_audio_items(self) -> dict[str, dict]:
-        """Paginated fetch of all Audio items. Returns {normalized_path: item}."""
+    def prefetch_audio_items(
+        self, *, include_media_sources: bool = False
+    ) -> dict[str, dict]:
+        """Paginated fetch of all Audio items. Returns {normalized_path: item}.
+
+        Pass include_media_sources=True to include MediaSources (and embedded
+        lyrics in MediaStreams.Extradata) at the cost of a larger payload.
+        """
+        fields = "Path,OfficialRating,AlbumArtist,Album,Genres"
+        if include_media_sources:
+            fields += ",MediaSources"
         items_by_path: dict[str, dict] = {}
         start_index = 0
         page_size = 500
@@ -570,7 +605,7 @@ class MediaServerClient:
             result = self._request(
                 "GET",
                 f"/Items?Recursive=true&IncludeItemTypes=Audio"
-                f"&Fields=Path,OfficialRating,AlbumArtist,Album,Genres"
+                f"&Fields={fields}"
                 f"&StartIndex={start_index}&Limit={page_size}",
             )
             if not result:
@@ -706,6 +741,7 @@ def write_report(
                     "matched_words",
                     "previous_rating",
                     "action",
+                    "source",
                 ]
             )
             for r in results:
@@ -723,6 +759,7 @@ def write_report(
                         "; ".join(r.matched_words),
                         r.previous_rating,
                         r.action,
+                        r.source,
                     ]
                 )
     except OSError as exc:
@@ -758,7 +795,9 @@ def process_library(config: Config) -> list[DetectionResult]:
             config.server_url, config.server_api_key, config.server_type
         )
         try:
-            server_items = client.prefetch_audio_items()
+            server_items = client.prefetch_audio_items(
+                include_media_sources=config.embedded_lyrics
+            )
         except MediaServerError as exc:
             log.error("Failed to prefetch server items: %s", exc)
             log.error("Continuing in analysis-only mode")
@@ -767,7 +806,7 @@ def process_library(config: Config) -> list[DetectionResult]:
         log.info("Server URL or API key not configured; running in analysis-only mode")
 
     results: list[DetectionResult] = []
-    sidecar_handled_paths: set[str] = set()
+    handled_paths: set[str] = set()
 
     for sidecar, audio in pairs:
         text = parse_sidecar(sidecar)
@@ -792,7 +831,7 @@ def process_library(config: Config) -> list[DetectionResult]:
 
         # Resolve server item
         norm_audio = _normalize_path(str(audio))
-        sidecar_handled_paths.add(norm_audio)
+        handled_paths.add(norm_audio)
         server_item = server_items.get(norm_audio)
         if server_item:
             dr.server_item_id = server_item.get("Id")
@@ -863,11 +902,60 @@ def process_library(config: Config) -> list[DetectionResult]:
 
         results.append(dr)
 
+    # --- Embedded lyrics pass ---
+    if config.embedded_lyrics and client is not None:
+        lib_root = Path(_normalize_path(str(config.library_path)))
+        for norm_path, item in server_items.items():
+            if norm_path in handled_paths:
+                continue
+            if not Path(norm_path).is_relative_to(lib_root):
+                continue
+            text = extract_embedded_lyrics(item)
+            if not text:
+                continue
+            tier, matched = classify_lyrics(text, config)
+            item_id = item.get("Id", "")
+            if not item_id:
+                continue
+            dr = DetectionResult(
+                sidecar_path=None,
+                audio_path=Path(norm_path),
+                tier=tier,
+                matched_words=matched,
+                server_item_id=item_id,
+                previous_rating=item.get("OfficialRating", "") or "",
+                artist=item.get("AlbumArtist", "") or "",
+                album=item.get("Album", "") or "",
+                source="embedded",
+            )
+            if tier is not None:
+                if config.dry_run:
+                    dr.action = "dry_run"
+                elif (item.get("OfficialRating") or "") == tier:
+                    dr.action = "already_correct"
+                else:
+                    dr.action = _apply_rating(client, item_id, tier, norm_path)
+            elif config.clear:
+                current = item.get("OfficialRating") or ""
+                if current:
+                    if config.dry_run:
+                        dr.action = "dry_run_clear"
+                    else:
+                        dr.action = _apply_rating(client, item_id, "", norm_path)
+                        if dr.action == "set":
+                            dr.action = "cleared"
+                else:
+                    dr.action = "skipped"
+            else:
+                dr.action = "skipped"
+            handled_paths.add(norm_path)
+            results.append(dr)
+
     # --- Genre-based G rating pass ---
     if config.g_genres and client is not None:
         lib_root = Path(_normalize_path(str(config.library_path)))
         for norm_path, item in server_items.items():
-            if norm_path in sidecar_handled_paths:
+            if norm_path in handled_paths:
                 continue
             if not Path(norm_path).is_relative_to(lib_root):
                 continue
@@ -891,6 +979,7 @@ def process_library(config: Config) -> list[DetectionResult]:
                 previous_rating=current_rating,
                 artist=item.get("AlbumArtist", "") or "",
                 album=item.get("Album", "") or "",
+                source="genre",
             )
             if current_rating == "G":
                 dr.action = "g_genre_already_correct"
@@ -1106,6 +1195,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Useful for populating [detection.g_genres] in the config."
         ),
     )
+    parser.add_argument(
+        "--embedded-lyrics",
+        action="store_true",
+        help="Fall back to embedded tag lyrics when no sidecar file exists (default: off)",
+    )
     return parser
 
 
@@ -1120,7 +1214,9 @@ def setup_logging(verbose: bool) -> None:
 
 def print_summary(results: list[DetectionResult]) -> None:
     sidecar_results = [
-        r for r in results if r.sidecar_path is not None or r.action == "no_audio_file"
+        r
+        for r in results
+        if r.source in ("sidecar", "embedded") or r.action == "no_audio_file"
     ]
     genre_results = [
         r
@@ -1153,6 +1249,9 @@ def print_summary(results: list[DetectionResult]) -> None:
     print("=== Explicit Lyrics Scan Complete ===")
     if total:
         print(f"  Sidecars scanned:    {total}")
+        embedded_count = sum(1 for r in sidecar_results if r.source == "embedded")
+        if embedded_count:
+            print(f"  From embedded tags:  {embedded_count}")
         print(f"    R-rated:           {r_count}")
         print(f"    PG-13:             {pg13_count}")
         print(f"    Clean:             {clean}")
