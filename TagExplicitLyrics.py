@@ -140,7 +140,7 @@ class DetectionResult:
     matched_words: list[str] = field(default_factory=list)
     emby_item_id: str | None = None
     action: str = ""  # set | cleared | skipped | already_correct | not_found_in_emby |
-    #                    error | no_audio_file | dry_run | dry_run_clear
+    #                    emby_unavailable | error | no_audio_file | dry_run | dry_run_clear
     previous_rating: str = ""
 
 
@@ -211,7 +211,8 @@ def build_config(args: argparse.Namespace) -> Config:
     )
     if not library_path_str:
         print(
-            "Error: library_path is required (positional arg, env var, or config)",
+            "Error: library_path is required. Provide it via command-line argument, "
+            "TAGLRC_LIBRARY_PATH environment variable, or [general].library_path in the TOML config.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -453,7 +454,7 @@ class EmbyClient:
                 if p:
                     items_by_path[_normalize_path(p)] = item
             total = result.get("TotalRecordCount", 0)
-            start_index += page_size
+            start_index += len(batch)
             log.debug("Fetched %d / %d audio items", start_index, total)
             if start_index >= total:
                 break
@@ -575,6 +576,8 @@ def process_library(config: Config) -> list[DetectionResult]:
             log.error("Failed to prefetch Emby items: %s", exc)
             log.error("Continuing in analysis-only mode")
             emby = None
+    else:
+        log.info("Emby URL or API key not configured; running in analysis-only mode")
 
     results: list[DetectionResult] = []
 
@@ -609,7 +612,9 @@ def process_library(config: Config) -> list[DetectionResult]:
         # Decide action
         if tier is not None:
             # Explicit content found — set rating
-            if dr.emby_item_id is None:
+            if emby is None:
+                dr.action = "emby_unavailable"
+            elif dr.emby_item_id is None:
                 dr.action = "not_found_in_emby"
                 log.warning("Audio file not found in Emby: %s", audio)
             elif config.dry_run:
@@ -626,7 +631,9 @@ def process_library(config: Config) -> list[DetectionResult]:
                     dr.action = _apply_rating(emby, dr.emby_item_id, tier, audio.name)
         elif config.clear:
             # Clean content + --clear flag — remove rating if set
-            if dr.emby_item_id is None:
+            if emby is None:
+                dr.action = "emby_unavailable"
+            elif dr.emby_item_id is None:
                 dr.action = "not_found_in_emby"
             elif config.dry_run:
                 current_rating = (
@@ -815,6 +822,7 @@ def print_summary(results: list[DetectionResult]) -> None:
     cleared = sum(1 for r in results if r.action == "cleared")
     dry = sum(1 for r in results if r.action.startswith("dry_run"))
     errors = sum(1 for r in results if r.action == "error")
+    emby_unavail = sum(1 for r in results if r.action == "emby_unavailable")
 
     print()
     print("=== Explicit Lyrics Scan Complete ===")
@@ -827,6 +835,8 @@ def print_summary(results: list[DetectionResult]) -> None:
     print(f"  Ratings set:         {rated}")
     print(f"  Already correct:     {already}")
     print(f"  Ratings cleared:     {cleared}")
+    if emby_unavail:
+        print(f"  Emby unavailable:    {emby_unavail}")
     if dry:
         print(f"  Dry-run would act:   {dry}")
     print(f"  Errors:              {errors}")
