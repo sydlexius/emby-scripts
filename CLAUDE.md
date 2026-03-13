@@ -87,6 +87,11 @@ pre-commit run --all-files
 - Item updates require the full item body: `POST /Items/{id}` with the complete JSON from the GET
 - Genre listing: `GET /MusicGenres?Recursive=true` (used by `--list-genres`)
 
+### Thread safety
+The script is single-threaded. `process_library` uses shared mutable state
+(`handled_paths: set`, `results: list`) that is not thread-safe. If parallelism
+is ever added, these would need locking or per-thread accumulation.
+
 ### Configuration
 - Secrets (API key, URL) go in `.env` at the repo root — never in TOML or committed files
 - Use `--env-file .env.prod` to target the production server
