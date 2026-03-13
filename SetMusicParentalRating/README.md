@@ -69,6 +69,7 @@ Positional:
   library_path              Library root (overrides config)
 
 Options:
+  --version                 Show program version and exit
   --config PATH             TOML config file (default: explicit_config.toml in script dir)
   --env-file PATH           .env file to load (default: .env in repo root; e.g. --env-file .env.prod)
   --server-type TYPE        'emby', 'jellyfin', or 'both' — auto-detected from configured
