@@ -662,7 +662,7 @@ class MediaServerClient:
         lyrics in MediaStreams.Extradata) at the cost of a larger payload.
         """
         fields = "Path,OfficialRating,AlbumArtist,Album,Genres"
-        if include_media_sources:
+        if include_media_sources and self.server_type == "emby":
             fields += ",MediaSources"
         items_by_path: dict[str, dict] = {}
         start_index = 0
@@ -722,6 +722,28 @@ class MediaServerClient:
                 f"Empty response for GET /Users/{uid}/Items/{item_id}"
             )
         return result
+
+    def fetch_lyrics_jellyfin(self, item_id: str) -> str:
+        """Fetch embedded lyrics for a Jellyfin track via GET /Audio/{item_id}/Lyrics.
+
+        Returns plain lyric text (LRC timestamps stripped), or "" if the item
+        has no lyrics or the request fails. Requires no lyrics plugin.
+        """
+        try:
+            data = self._request("GET", f"/Audio/{item_id}/Lyrics")
+        except MediaServerError as exc:
+            if "HTTP 404" in str(exc):
+                return ""
+            log.warning("Jellyfin lyrics fetch failed for item %s: %s", item_id, exc)
+            return ""
+        if not data:
+            return ""
+        lines = [
+            entry.get("Text", "")
+            for entry in data.get("Lyrics", [])
+            if entry.get("Text")
+        ]
+        return strip_lrc_tags("\n".join(lines))
 
     def update_item(self, item_id: str, item_body: dict) -> None:
         """POST /Items/{id} — send full item body with modified fields."""
