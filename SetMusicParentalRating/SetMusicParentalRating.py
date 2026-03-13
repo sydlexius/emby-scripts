@@ -434,7 +434,7 @@ def parse_sidecar(path: Path) -> str:
 
 
 def extract_embedded_lyrics(item: dict) -> str:
-    """Extract embedded lyrics text from an Emby item's MediaSources.
+    """Extract embedded lyrics text from a media server item's MediaSources.
 
     Looks for internal Subtitle streams (IsExternal=False, Type='Subtitle')
     and returns their Extradata joined with newlines, stripped of LRC tags.
@@ -607,6 +607,7 @@ class MediaServerClient:
         items_by_path: dict[str, dict] = {}
         start_index = 0
         page_size = 500
+        total = 0
         while True:
             result = self._request(
                 "GET",
@@ -615,6 +616,13 @@ class MediaServerClient:
                 f"&StartIndex={start_index}&Limit={page_size}",
             )
             if not result:
+                if items_by_path:
+                    log.warning(
+                        "Server returned empty body mid-pagination after %d items "
+                        "(expected %d); prefetch will be incomplete",
+                        len(items_by_path),
+                        total,
+                    )
                 break
             batch = result.get("Items", [])
             if not batch:
