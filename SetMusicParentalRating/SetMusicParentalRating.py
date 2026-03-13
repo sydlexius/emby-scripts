@@ -117,8 +117,8 @@ class MediaServerError(Exception):
 @dataclass
 class Config:
     library_path: Path
-    server_url: str
-    server_api_key: str
+    server_url: str  # "" in "both" mode; use emby_url/jellyfin_url instead
+    server_api_key: str  # "" in "both" mode; use emby_api_key/jellyfin_api_key instead
     server_type: str = "emby"
     r_stems: list[str] = field(default_factory=lambda: list(DEFAULT_R_STEMS))
     r_exact: list[str] = field(default_factory=lambda: list(DEFAULT_R_EXACT))
@@ -848,9 +848,7 @@ def _normalize_path(p: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _path_parts(
-    audio_path: Path | None, library_path: Path | None = None
-) -> tuple[str, str]:
+def _path_parts(audio_path: Path | None, library_path: Path | None) -> tuple[str, str]:
     """Best-effort fallback using the path relative to the library root."""
     if audio_path is None:
         return "", ""
@@ -925,7 +923,13 @@ def write_report(
 
 
 def process_library(config: Config) -> list[DetectionResult]:
-    """Main flow: scan sidecars -> detect -> update media server."""
+    """Main flow: scan sidecars -> detect -> update media server.
+
+    Thread-safety: this function is single-threaded by design. The shared
+    ``handled_paths`` set and ``results`` list are not thread-safe. If
+    parallelism is added (e.g. concurrent Jellyfin lyrics fetches), these
+    would need locking or per-thread accumulation.
+    """
     lp = config.library_path
     if not lp.is_absolute():
         log.error("library_path must be an absolute path; got %r", str(lp))
