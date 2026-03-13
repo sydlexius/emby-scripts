@@ -1096,9 +1096,16 @@ def process_library(config: Config) -> list[DetectionResult]:
                 album=album,
                 source="embedded",
             )
-            if not item_id:
+            if item_id is None:
                 log.warning(
                     "Embedded-lyrics pass: server item at %s has no 'Id' field;"
+                    " cannot update",
+                    norm_path,
+                )
+                dr.action = "not_found_in_server"
+            elif item_id == "":
+                log.error(
+                    "Embedded-lyrics pass: server item at %s has empty 'Id';"
                     " cannot update",
                     norm_path,
                 )
@@ -1136,9 +1143,15 @@ def process_library(config: Config) -> list[DetectionResult]:
             if matched_genre is None:
                 continue
             item_id, prev_rating, artist, album = _item_fields(item)
-            if not item_id:
+            if item_id is None:
                 log.warning(
                     "Genre-pass: server item at %s has no 'Id' field; skipping",
+                    norm_path,
+                )
+                continue
+            if item_id == "":
+                log.error(
+                    "Genre-pass: server item at %s has empty 'Id'; skipping",
                     norm_path,
                 )
                 continue
