@@ -27,8 +27,16 @@ url = "http://localhost:8097"
 
 [detection]
 # Set to true to also scan embedded lyrics tags (MediaSources) for tracks with no sidecar.
-# Off by default — enabling this increases the prefetch payload size.
-embedded_lyrics = false
+# Sidecars are .lrc/.txt files. If you enable embedded_lyrics, consider also
+# uncommenting lyrics_priority below.
+# embedded_lyrics = false
+
+# Controls which source wins when a track has both a sidecar (.lrc/.txt) and embedded lyrics.
+# Only applies when embedded_lyrics = true. Defaults to "sidecar" if unset.
+#   most_explicit: whichever source detected the higher tier wins (R > PG-13 > clean)
+#   sidecar:       sidecar always wins
+#   embedded:      embedded tag always wins
+# lyrics_priority = "most_explicit"
 
 [detection.r]
 stems = ["fuck", "shit", "pussy", "cock", "cum", "faggot"]
