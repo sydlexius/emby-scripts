@@ -161,7 +161,8 @@ class DetectionResult:
     album: str = ""
     source: str = ""  # "sidecar" | "embedded" | "genre" | "force"
     source_conflict: str = (
-        ""  # e.g. "sidecar:PG-13->EMBEDDED:R"; empty when no conflict
+        ""  # format: "{loser}:{tier}->{WINNER}:{tier}"; loser lowercase, WINNER uppercase;
+        #  tier is "R"|"PG-13"|"clean" (clean = no explicit content); empty when sources agree
     )
 
 
@@ -565,9 +566,10 @@ def _resolve_priority(
 
     winning_source is lowercase ("sidecar" or "embedded") for storage in
     DetectionResult.source. source_conflict uses uppercase for the winning
-    source name; empty string when both sources agree.
+    source name and lowercase for the losing source name (e.g.
+    "embedded:PG-13->SIDECAR:R"); empty string when both sources agree.
     None tier is serialized as "clean" in source_conflict.
-    Tie under most_explicit: sidecar wins.
+    Equal tiers always defer to sidecar regardless of priority mode.
     """
 
     def _label(tier: str | None) -> str:
@@ -585,7 +587,7 @@ def _resolve_priority(
         winner, w_matched, w_src = embedded_tier, embedded_matched, "embedded"
         loser_src, loser_tier = "sidecar", sidecar_tier
     else:  # most_explicit
-        if _TIER_RANK.get(embedded_tier, 0) > _TIER_RANK.get(sidecar_tier, 0):
+        if _TIER_RANK[embedded_tier] > _TIER_RANK[sidecar_tier]:
             winner, w_matched, w_src = embedded_tier, embedded_matched, "embedded"
             loser_src, loser_tier = "sidecar", sidecar_tier
         else:
@@ -915,17 +917,26 @@ def process_library(config: Config) -> list[DetectionResult]:
             dr.artist = server_item.get("AlbumArtist", "") or ""
             dr.album = server_item.get("Album", "") or ""
 
-        # Priority resolution — when both sidecar and embedded lyrics exist
+        # Augment sidecar classification with embedded lyrics if present
         if config.embedded_lyrics and server_item:
-            embedded_text = extract_embedded_lyrics(server_item)
-            if embedded_text:
-                emb_tier, emb_matched = classify_lyrics(embedded_text, config)
-                tier, matched, winning_source, dr.source_conflict = _resolve_priority(
-                    tier, matched, emb_tier, emb_matched, config.lyrics_priority
+            try:
+                embedded_text = extract_embedded_lyrics(server_item)
+                if embedded_text:
+                    emb_tier, emb_matched = classify_lyrics(embedded_text, config)
+                    tier, matched, winning_source, dr.source_conflict = (
+                        _resolve_priority(
+                            tier, matched, emb_tier, emb_matched, config.lyrics_priority
+                        )
+                    )
+                    dr.source = winning_source
+                    dr.tier = tier
+                    dr.matched_words = matched
+            except Exception as exc:
+                log.warning(
+                    "Failed to augment sidecar result with embedded lyrics for %s: %s",
+                    audio,
+                    exc,
                 )
-                dr.source = winning_source
-                dr.tier = tier
-                dr.matched_words = matched
 
         # Decide action
         if tier is not None:
@@ -1336,10 +1347,18 @@ def print_summary(results: list[DetectionResult]) -> None:
         1 for r in scan_results if r.sidecar_path is None and r.source == "embedded"
     )
     sidecar_won_count = sum(
-        1 for r in scan_results if r.sidecar_path is not None and r.source == "sidecar"
+        1
+        for r in scan_results
+        if r.sidecar_path is not None
+        and r.source_conflict != ""
+        and r.source == "sidecar"
     )
     embedded_won_count = sum(
-        1 for r in scan_results if r.sidecar_path is not None and r.source == "embedded"
+        1
+        for r in scan_results
+        if r.sidecar_path is not None
+        and r.source_conflict != ""
+        and r.source == "embedded"
     )
     conflict_count = sum(1 for r in scan_results if r.source_conflict != "")
     total = len(scan_results)
