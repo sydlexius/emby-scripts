@@ -323,8 +323,8 @@ def build_config(args: argparse.Namespace) -> Config:
         or ""
     ).strip()
 
-    has_emby = bool(emby_url and emby_api_key)
-    has_jellyfin = bool(jellyfin_url and jellyfin_api_key)
+    has_emby_url = bool(emby_url)
+    has_jellyfin_url = bool(jellyfin_url)
 
     if explicit_type:
         server_type = explicit_type
@@ -349,14 +349,14 @@ def build_config(args: argparse.Namespace) -> Config:
                 )
                 sys.exit(1)
     else:
-        if has_emby and has_jellyfin:
+        if has_emby_url and has_jellyfin_url:
             print(
                 "Error: both Emby and Jellyfin are configured; "
                 "use --server-type emby, --server-type jellyfin, or --server-type both to select.",
                 file=sys.stderr,
             )
             sys.exit(1)
-        server_type = "jellyfin" if has_jellyfin else "emby"
+        server_type = "jellyfin" if has_jellyfin_url else "emby"
 
     # --- server_url / server_api_key for single-server mode ---
     if server_type == "both":
@@ -1580,21 +1580,35 @@ def main() -> None:
         if config.force_rating:
             try:
                 emby_results = force_rate_library(emby_cfg)
-            except SystemExit:
-                log.error("Emby run failed; Jellyfin run will still proceed.")
+            except SystemExit as exc:
+                log.error(
+                    "Emby run failed (exit code %s); Jellyfin run will still proceed.",
+                    exc.code,
+                )
                 emby_results = []
         else:
-            emby_results = process_library(emby_cfg)
+            try:
+                emby_results = process_library(emby_cfg)
+            except SystemExit as exc:
+                log.error(
+                    "Emby run failed (exit code %s); Jellyfin run will still proceed.",
+                    exc.code,
+                )
+                emby_results = []
 
         log.info("--- Starting Jellyfin run ---")
         if config.force_rating:
             try:
                 jf_results = force_rate_library(jf_cfg)
-            except SystemExit:
-                log.error("Jellyfin run failed.")
+            except SystemExit as exc:
+                log.error("Jellyfin run failed (exit code %s).", exc.code)
                 jf_results = []
         else:
-            jf_results = process_library(jf_cfg)
+            try:
+                jf_results = process_library(jf_cfg)
+            except SystemExit as exc:
+                log.error("Jellyfin run failed (exit code %s).", exc.code)
+                jf_results = []
         results = emby_results + jf_results
         if config.report_path:
             write_report(results, config.report_path, config.library_path)

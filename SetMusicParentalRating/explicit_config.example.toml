@@ -12,7 +12,7 @@
 #   To sync both servers in one pass, set both credential pairs and use SERVER_TYPE=both.
 
 [general]
-server_type = "emby"   # "emby" (default), "jellyfin", or "both" (syncs both in one pass)
+# server_type = "emby"   # Uncomment to force "emby", "jellyfin", or "both"; leave unset to auto-detect
 # A single library path. To scan multiple libraries, run the script once per
 # library or use a wrapper script. The library_path can also be passed as the
 # first positional CLI argument or via TAGLRC_LIBRARY_PATH env var.
