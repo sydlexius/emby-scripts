@@ -153,17 +153,3 @@ The `--report` flag produces a CSV with columns useful for admin review:
 | `source` | `sidecar` · `embedded` · `genre` · `force` — identifies which detection pass produced the row |
 
 This lets an admin spot false positives caused by lyric transcription errors (e.g., "cuming" instead of "coming") and take corrective action on the sidecar files.
-
-### API Notes
-
-Both Emby and Jellyfin use the same REST API shape. The only client-visible difference is the authentication header:
-
-| Server | Auth header |
-|--------|-------------|
-| Emby | `X-Emby-Token` |
-| Jellyfin | `X-MediaBrowser-Token` |
-
-- Item listing: `GET /Items?Recursive=true&IncludeItemTypes=Audio&Fields=Path,OfficialRating,AlbumArtist,Album,Genres` (paginated; `MediaSources` is appended to `Fields` when `--embedded-lyrics` is enabled)
-- Item fetch: `GET /Users/{userId}/Items/{itemId}` (user-scoped; `GET /Items/{id}` returns 404)
-- Item update: `POST /Items/{itemId}` with the full item body (GET-then-POST round-trip preserves existing metadata)
-- Genre listing: `GET /MusicGenres?Recursive=true` (used by `--list-genres`)
