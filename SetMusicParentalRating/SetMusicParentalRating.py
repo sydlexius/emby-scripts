@@ -8,6 +8,8 @@ On older Python, falls back to the tomli package.
 
 from __future__ import annotations
 
+__version__ = "1.0.0"
+
 import argparse
 import csv
 import json
@@ -1335,6 +1337,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="SetMusicParentalRating",
         description="Scan sidecar lyric files for explicit content and set "
         "OfficialRating on matching tracks via the Emby or Jellyfin API.",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
     )
     parser.add_argument(
         "library_path",
