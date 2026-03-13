@@ -124,6 +124,8 @@ embedded_lyrics = false   # set to true to scan embedded tag lyrics for tracks w
 
 Enabling `embedded_lyrics` adds `MediaSources` to the server prefetch, which increases payload size on large libraries. Use `--no-embedded-lyrics` on the CLI to override a `true` value for a one-off run.
 
+> **Jellyfin note:** Jellyfin does not expose embedded lyrics content via its API. `--embedded-lyrics` has no effect when `--server-type jellyfin` is used — only sidecar files are scanned.
+
 ### `--lyrics-priority {sidecar,embedded,most_explicit}`
 
 Controls which lyrics source determines the rating when a track has **both** a sidecar file (`.lrc`/`.txt`) and embedded lyrics (requires `--embedded-lyrics`).
