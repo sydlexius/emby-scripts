@@ -268,8 +268,9 @@ def build_config(args: argparse.Namespace) -> Config:
     # --- library_paths (multi-path support) ---
     # CLI provides a list (nargs="*"); env var and TOML provide a single string or list.
     raw_paths: list[str] = []
-    if args.library_path:
-        raw_paths = args.library_path
+    cli_paths = getattr(args, "library_path", None)
+    if cli_paths:
+        raw_paths = cli_paths
     else:
         env_lp = os.environ.get("TAGLRC_LIBRARY_PATH") or env_file.get(
             "TAGLRC_LIBRARY_PATH"
@@ -283,7 +284,7 @@ def build_config(args: argparse.Namespace) -> Config:
             elif toml_lp:
                 raw_paths = [toml_lp]
 
-    if not raw_paths and not getattr(args, "list_genres", False):
+    if not raw_paths and getattr(args, "command", None) != "genres":
         print(
             "Error: library_path is required. Provide it via command-line argument, "
             "TAGLRC_LIBRARY_PATH environment variable, or [general].library_path in the TOML config.",
@@ -395,7 +396,9 @@ def build_config(args: argparse.Namespace) -> Config:
     lyrics_priority_toml = det.get("lyrics_priority", "sidecar")
 
     # --- report ---
-    report_path_str = args.report or toml.get("report", {}).get("output_path")
+    report_path_str = getattr(args, "report", None) or toml.get("report", {}).get(
+        "output_path"
+    )
     report_path = Path(report_path_str) if report_path_str else None
 
     return Config(
@@ -408,16 +411,16 @@ def build_config(args: argparse.Namespace) -> Config:
         pg13_stems=pg13_stems,
         pg13_exact=pg13_exact,
         false_positives=false_positives,
-        dry_run=args.dry_run,
-        clear=args.clear,
-        force_rating=args.force_rating,
+        dry_run=getattr(args, "dry_run", False),
+        clear=getattr(args, "clear", False),
+        force_rating=getattr(args, "rating", None),
         report_path=report_path,
         g_genres=g_genres,
         embedded_lyrics=embedded_lyrics
-        if args.embedded_lyrics is None
+        if getattr(args, "embedded_lyrics", None) is None
         else args.embedded_lyrics,
         lyrics_priority=lyrics_priority_toml
-        if args.lyrics_priority is None
+        if getattr(args, "lyrics_priority", None) is None
         else args.lyrics_priority,
         emby_url=emby_url.rstrip("/"),
         emby_api_key=emby_api_key,
@@ -1220,12 +1223,12 @@ def process_library(config: Config) -> list[DetectionResult]:
 
 
 def force_rate_library(config: Config) -> list[DetectionResult]:
-    """--force-rating mode: set a fixed rating on ALL audio tracks under the
+    """'rate' subcommand: set a fixed rating on ALL audio tracks under the
     library path(s), skipping tracks already at the target rating."""
     _validate_library_paths(config.library_paths)
     if not config.server_url or not config.server_api_key:
         log.error(
-            "--force-rating requires a server URL and API key "
+            "'rate' requires a server URL and API key "
             "(set EMBY_URL+EMBY_API_KEY or JELLYFIN_URL+JELLYFIN_API_KEY in .env, or use --server-url/--api-key)"
         )
         sys.exit(1)
@@ -1290,17 +1293,17 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
 
 
 def list_genres_mode(config: Config) -> None:
-    """--list-genres mode: print all Audio genre names from the server to stdout. Exits with non-zero status on error."""
+    """'genres' subcommand: print all Audio genre names from the server to stdout. Exits with non-zero status on error."""
     if config.server_type == "both":
         print(
-            "Error: --list-genres is not supported with --server-type both. "
+            "Error: 'genres' is not supported with --server-type both. "
             "Run separately with --server-type emby and --server-type jellyfin.",
             file=sys.stderr,
         )
         sys.exit(1)
     if not config.server_url or not config.server_api_key:
         print(
-            "Error: --list-genres requires server URL and API key "
+            "Error: 'genres' requires server URL and API key "
             "(set EMBY_URL+EMBY_API_KEY or JELLYFIN_URL+JELLYFIN_API_KEY in .env, or use --server-url/--api-key). "
             "Use --server-type to select Emby or Jellyfin when both are configured.",
             file=sys.stderr,
@@ -1405,84 +1408,135 @@ def _decide_clear_action(
 # ---------------------------------------------------------------------------
 
 
+_SCAN_EXAMPLES = """\
+examples:
+  # Dry run — analyze without touching the server
+  %(prog)s /path/to/music --dry-run --report report.csv
+
+  # Multiple library paths in a single run
+  %(prog)s /path/to/music /path/to/classical --dry-run
+
+  # Include embedded lyrics scanning
+  %(prog)s /path/to/music --embedded-lyrics --lyrics-priority most_explicit
+
+  # Clear stale ratings after fixing sidecar typos
+  %(prog)s /path/to/music --clear
+"""
+
+_RATE_EXAMPLES = """\
+examples:
+  # Rate a known-clean library as G
+  %(prog)s /path/to/classical G
+
+  # Dry-run rate against Jellyfin
+  %(prog)s /path/to/classical G --server-type jellyfin --dry-run
+"""
+
+_GENRES_EXAMPLES = """\
+examples:
+  # List all genre tags from the default (Emby) server
+  %(prog)s
+
+  # List genre tags from a Jellyfin server
+  %(prog)s --server-type jellyfin
+"""
+
+_MAIN_EXAMPLES = """\
+subcommands:
+  scan    Scan sidecar/embedded lyrics and set ratings
+  rate    Set a fixed rating on all tracks under the given path(s)
+  genres  List all Audio genre tags from the server
+
+examples:
+  %(prog)s scan /path/to/music --dry-run --report report.csv
+  %(prog)s rate /path/to/classical G
+  %(prog)s genres --server-type jellyfin
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="SetMusicParentalRating",
-        description="Scan sidecar lyric files for explicit content and set "
-        "OfficialRating on matching tracks via the Emby or Jellyfin API.",
-    )
-    parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {__version__}"
-    )
-    parser.add_argument(
-        "library_path",
-        nargs="*",
-        default=None,
-        help="Library root directory/directories (overrides config; multiple paths supported)",
-    )
-    parser.add_argument(
+    # --- shared parent for options common to all subcommands ---
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument(
         "--config",
         default=None,
         help="Path to TOML config file (default: explicit_config.toml next to script)",
     )
-    parser.add_argument(
+    shared.add_argument(
         "--env-file",
         default=None,
         help="Path to .env file (default: .env in the repo root; e.g. --env-file .env.prod)",
     )
-    parser.add_argument(
+    shared.add_argument(
         "--server-type",
         default=None,
         choices=("emby", "jellyfin", "both"),
         help="Media server type: 'emby', 'jellyfin', or 'both' (syncs both in one pass)",
     )
-    parser.add_argument(
+    shared.add_argument(
         "--server-url",
         default=None,
         help="Server URL — overrides the env var for the active server type",
     )
-    parser.add_argument(
+    shared.add_argument(
         "--api-key",
         default=None,
         help="API key — overrides the env var for the active server type",
     )
-    parser.add_argument(
-        "-n",
-        "--dry-run",
-        action="store_true",
-        help="Analyze only — no server updates",
-    )
-    parser.add_argument(
+    shared.add_argument(
         "-v",
         "--verbose",
         action="store_true",
         help="Debug logging",
     )
+
+    # --- top-level parser ---
+    parser = argparse.ArgumentParser(
+        prog="SetMusicParentalRating",
+        description="Scan sidecar lyric files for explicit content and set "
+        "OfficialRating on matching tracks via the Emby or Jellyfin API.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_MAIN_EXAMPLES,
+    )
     parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
+
+    subparsers = parser.add_subparsers(dest="command")
+
+    # --- scan subcommand ---
+    scan_parser = subparsers.add_parser(
+        "scan",
+        parents=[shared],
+        help="Scan sidecar/embedded lyrics and set ratings",
+        description="Scan sidecar and embedded lyrics for explicit content, "
+        "then set OfficialRating on matching tracks.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_SCAN_EXAMPLES,
+    )
+    scan_parser.add_argument(
+        "library_path",
+        nargs="*",
+        default=None,
+        help="Library root directory/directories (overrides config; multiple paths supported)",
+    )
+    scan_parser.add_argument(
+        "-n",
+        "--dry-run",
+        action="store_true",
+        help="Analyze only — no server updates",
+    )
+    scan_parser.add_argument(
         "--report",
         default=None,
         help="CSV report output path",
     )
-    parser.add_argument(
+    scan_parser.add_argument(
         "--clear",
         action="store_true",
         help="Clear ratings from tracks whose sidecars exist but contain no explicit words",
     )
-    parser.add_argument(
-        "--force-rating",
-        default=None,
-        metavar="RATING",
-        help="Bypass detection; set this rating on ALL audio tracks in the library via the media server",
-    )
-    parser.add_argument(
-        "--list-genres",
-        action="store_true",
-        help=(
-            "Connect to the media server, print all Audio genre tags, then exit. "
-            "Useful for populating [detection.g_genres] in the config."
-        ),
-    )
-    parser.add_argument(
+    scan_parser.add_argument(
         "--embedded-lyrics",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -1494,7 +1548,7 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: off)"
         ),
     )
-    parser.add_argument(
+    scan_parser.add_argument(
         "--lyrics-priority",
         default=None,
         choices=("sidecar", "embedded", "most_explicit"),
@@ -1505,6 +1559,49 @@ def build_parser() -> argparse.ArgumentParser:
             "Ties (both sources at the same tier) always defer to sidecar regardless of priority."
         ),
     )
+
+    # --- rate subcommand ---
+    rate_parser = subparsers.add_parser(
+        "rate",
+        parents=[shared],
+        help="Set a fixed rating on all tracks under the given path(s)",
+        description="Skip detection and set a fixed OfficialRating on ALL "
+        "audio tracks under the given library path(s).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_RATE_EXAMPLES,
+    )
+    rate_parser.add_argument(
+        "library_path",
+        nargs="+",
+        help="Library root directory/directories",
+    )
+    rate_parser.add_argument(
+        "rating",
+        help="Rating to set on all tracks (e.g. G, PG-13, R)",
+    )
+    rate_parser.add_argument(
+        "-n",
+        "--dry-run",
+        action="store_true",
+        help="Analyze only — no server updates",
+    )
+    rate_parser.add_argument(
+        "--report",
+        default=None,
+        help="CSV report output path",
+    )
+
+    # --- genres subcommand ---
+    subparsers.add_parser(
+        "genres",
+        parents=[shared],
+        help="List all Audio genre tags from the server",
+        description="Connect to the media server, print all Audio genre tags, "
+        "then exit. Useful for populating [detection.g_genres] in the config.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_GENRES_EXAMPLES,
+    )
+
     return parser
 
 
@@ -1628,6 +1725,10 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
+    if not args.command:
+        parser.print_help()
+        sys.exit(0)
+
     setup_logging(args.verbose)
 
     # ValueError is raised by Config.__post_init__ for invalid field values
@@ -1637,7 +1738,7 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
 
-    if args.list_genres:
+    if args.command == "genres":
         list_genres_mode(config)
         return
 
