@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Standalone Python utilities for managing an Emby or Jellyfin media server. Each script lives in its own subdirectory with its own README and TOML config. Shared server credentials (`.env`, `.env.prod`) live in the repo root.
 
-Currently contains one script: `SetMusicParentalRating/SetMusicParentalRating.py` — scans sidecar lyric files (.lrc, .txt) for explicit content using tiered word detection (R / PG-13) and sets `OfficialRating` on matching audio tracks via the Emby or Jellyfin API.
+Currently contains one script: `SetMusicParentalRating/SetMusicParentalRating.py` — fetches lyrics from the Emby or Jellyfin API, detects explicit content using tiered word detection (R / PG-13), and sets `OfficialRating` on matching audio tracks.
 
 ## Repository Layout
 
@@ -31,23 +31,30 @@ Currently contains one script: `SetMusicParentalRating/SetMusicParentalRating.py
 ```bash
 # Run from the repo root:
 
-# Dry run (analysis only, no server writes) — Emby (default)
-python3 SetMusicParentalRating/SetMusicParentalRating.py scan /path/to/music --dry-run --report report.csv
+# Dry run — evaluate lyrics, report but don't update server
+python3 SetMusicParentalRating/SetMusicParentalRating.py rate --library Music --dry-run --report report.csv
 
-# Multiple library paths in a single run
-python3 SetMusicParentalRating/SetMusicParentalRating.py scan /path/to/music /path/to/classical --dry-run --report report.csv
+# Scope to a specific library or location
+python3 SetMusicParentalRating/SetMusicParentalRating.py rate --library Music --dry-run
+python3 SetMusicParentalRating/SetMusicParentalRating.py rate --location classical --dry-run
 
-# Dry run against Jellyfin
-python3 SetMusicParentalRating/SetMusicParentalRating.py scan /path/to/music --server-type jellyfin --dry-run
+# Target a specific named server
+python3 SetMusicParentalRating/SetMusicParentalRating.py rate --server home-jellyfin --library Music --dry-run
 
-# Rate a known-clean library
-python3 SetMusicParentalRating/SetMusicParentalRating.py rate /path/to/classical G
+# Force-rate a library as G (no lyrics evaluation)
+python3 SetMusicParentalRating/SetMusicParentalRating.py force G --library "Classical Music"
 
-# List genres from the server
-python3 SetMusicParentalRating/SetMusicParentalRating.py genres
+# Remove all ratings from a library
+python3 SetMusicParentalRating/SetMusicParentalRating.py reset --library Music --dry-run
+
+# Skip tracks that already have a rating
+python3 SetMusicParentalRating/SetMusicParentalRating.py rate --library Music --skip-existing --dry-run
+
+# One-off server (no TOML config needed)
+python3 SetMusicParentalRating/SetMusicParentalRating.py rate --server-url http://localhost:8096 --api-key YOUR_KEY --library Music --dry-run
 
 # Production server
-python3 SetMusicParentalRating/SetMusicParentalRating.py scan /path/to/music --env-file .env.prod --config SetMusicParentalRating/explicit_config.prod.toml
+python3 SetMusicParentalRating/SetMusicParentalRating.py rate --env-file .env.prod --config SetMusicParentalRating/explicit_config.prod.toml --dry-run
 ```
 
 ### Lint & Format
@@ -76,35 +83,46 @@ pre-commit run --all-files
 `SetMusicParentalRating.py` is a single-file script with no external dependencies — pure stdlib Python 3.11+.
 
 ### Key data flow
-1. **CLI** (`build_parser`): three subcommands — `scan`, `rate`, `genres` — with a shared parent parser for common options (`--config`, `--env-file`, `--server-type`, `--server-url`, `--api-key`, `-v`). **Config merge** (`build_config`): CLI flags > `os.environ` > `.env` file > `explicit_config.toml` > hardcoded defaults. `Config.library_paths` is a `list[Path]` — the CLI accepts multiple positional args, the TOML key `library_path` accepts both a string and an array, and the `TAGLRC_LIBRARY_PATH` env var provides a single path. Server-type resolution is two-phase: explicit `SERVER_TYPE` override wins; otherwise auto-detected from which `EMBY_URL`/`JELLYFIN_URL` vars are present (errors if both are set). `Config.__post_init__` precompiles exact-match regexes — any new config field that needs preprocessing belongs there.
-2. **Filesystem scan** (`scan_library`): finds sidecar files, matches each to an audio file by filename stem. When multiple library paths are given, results are merged with deduplication.
-3. **LRC parsing** (`strip_lrc_tags`, `parse_sidecar`): strips timestamps/metadata to get plain text. `extract_embedded_lyrics` does the same for `MediaSources.MediaStreams[].Extradata` from server items.
+1. **CLI** (`build_parser`): three subcommands — `rate`, `force`, `reset` — with a shared parent parser for common options (`--config`, `--env-file`, `--server`, `--server-url`, `--api-key`, `--library`, `--location`, `-v`). **Config merge** (`build_config`): CLI flags > `os.environ` > `.env` file > `explicit_config.toml` > hardcoded defaults. **Server resolution** (`_resolve_servers`): `--server-url`+`--api-key` (one-off) > TOML `[servers.*]` sections. Server type (Emby/Jellyfin) is auto-detected via `GET /System/Info/Public`. `Config.__post_init__` precompiles exact-match regexes.
+2. **Library scoping** (`_resolve_library_scope`): `GET /Library/VirtualFolders` discovers music libraries. `--library NAME` scopes by `ParentId`. `--location NAME` adds post-prefetch path filtering via `_filter_by_location`. Without flags, processes all audio items.
+3. **Lyrics fetch** (`fetch_lyrics`): Emby: tries external subtitle streams (`GET /Videos/{id}/{msid}/Subtitles/{idx}/Stream.txt`), falls back to embedded `Extradata`. Jellyfin: `GET /Audio/{id}/Lyrics`. Returns plain text (LRC-stripped) or `None`.
 4. **Detection** (`classify_lyrics`): two-tier word detection — stem matching (substring with false-positive filter) and exact matching (word-boundary regex). R tier takes priority over PG-13.
-5. **Server sync** (`process_library`): bulk prefetches all Audio items by path into `server_items: dict[str, dict]`, then runs three sequential passes, each skipping paths already in `handled_paths`. `_validate_library_paths` checks each path is absolute, exists, and is a directory. `_is_under_roots` checks whether a normalized path falls under any of the library roots (used by embedded and genre passes to scope server items). `_item_fields` extracts `(item_id, previous_rating, artist, album)` from each server item. `_decide_rating_action` / `_decide_clear_action` encapsulate the shared set/clear decision logic used across all passes.
-   - **Sidecar pass**: processes all `(sidecar, audio)` pairs from `scan_library`; adds each audio path to `handled_paths`. When `config.embedded_lyrics` is on, each sidecar-pass item also checks the server item for embedded lyrics and calls `_resolve_priority` to pick the winning source — see `lyrics_priority` below.
-   - **Embedded pass** (only when `config.embedded_lyrics`): for Emby, reads `Extradata` from prefetched `MediaSources`; for Jellyfin, calls `GET /Audio/{itemId}/Lyrics` per track. Adds matched paths to `handled_paths`
-   - **Genre pass** (only when `config.g_genres`): assigns `G` to items not yet in `handled_paths` whose `Genres` list overlaps the allow-list
-6. Each track produces one `DetectionResult`. `source` identifies which lyrics source determined the final rating: `"sidecar"` | `"embedded"` | `"genre"` | `"force"`. `source_conflict` is non-empty when both sidecar and embedded lyrics existed and disagreed (format: `"{loser}:{tier}->{WINNER}:{tier}"`). `action` records what happened: `set | cleared | skipped | already_correct | not_found_in_server | server_unavailable | error | no_audio_file | dry_run | dry_run_clear | g_genre | g_genre_already_correct | dry_run_g_genre`.
+5. **Rating** (`process_library`): single-pass over prefetched items. For each: fetch lyrics → classify → set/skip rating. Items without lyrics fall through to genre allow-list check (`match_g_genre`). `--overwrite` (default) re-evaluates all tracks and clears ratings from clean tracks. `--skip-existing` skips tracks with any rating.
+6. **Force rating** (`force_rate_library`): sets a fixed rating on all tracks in scope without lyrics evaluation. Respects `--overwrite`/`--skip-existing`.
+7. **Reset** (`reset_library`): removes `OfficialRating` from all tracks in scope.
+8. Each track produces one `DetectionResult`. `source`: `"lyrics"` | `"genre"` | `"force"` | `"reset"`. `action`: `set | cleared | skipped | already_correct | not_found_in_server | error | dry_run | dry_run_clear | g_genre | g_genre_already_correct | dry_run_g_genre`.
 
 ### API pattern (Emby and Jellyfin)
 - Auth: `X-Emby-Token` header (Emby) or `X-MediaBrowser-Token` header (Jellyfin)
-- Bulk audio listing: `GET /Users/{userId}/Items?Recursive=true&IncludeItemTypes=Audio&Fields=Path,OfficialRating,AlbumArtist,Album,Genres` (paginated at 500; `MediaSources` appended to `Fields` when `--embedded-lyrics` is enabled)
+- Server type detection: `GET /System/Info/Public` (unauthenticated) — `ProductName == "Jellyfin Server"` → Jellyfin; fallback: `Server` header
+- Library discovery: `GET /Library/VirtualFolders` — returns `Name`, `ItemId`, `CollectionType`, `Locations[]`
+- Bulk audio listing: `GET /Users/{userId}/Items?Recursive=true&IncludeItemTypes=Audio&Fields=Path,OfficialRating,AlbumArtist,Album,Genres` (paginated at 500; `MediaSources` appended when lyrics fetch needs stream info; `&ParentId={id}` for library scoping)
 - Item reads are user-scoped: `GET /Users/{userId}/Items/{id}` (not `GET /Items/{id}` which returns 404)
 - Item updates require the full item body: `POST /Items/{id}` with the complete JSON from the GET
-- Genre listing: `GET /MusicGenres?Recursive=true` (used by `--list-genres`)
+- Genre listing: `GET /MusicGenres?Recursive=true`
 
 ### Thread safety
 The script is single-threaded. `process_library` uses shared mutable state
 (`handled_paths: set`, `results: list`) that is not thread-safe. If parallelism
 is ever added, these would need locking or per-thread accumulation.
 
+### Named server model
+Servers are defined in TOML `[servers.*]` sections with API keys in `.env` as `{LABEL}_API_KEY` (hyphens → underscores):
+```toml
+[servers.home-emby]
+url = "http://192.168.1.126:8096"
+```
+```bash
+HOME_EMBY_API_KEY=your-key
+```
+Server type is auto-detected; override with `type = "emby"` in the TOML section. `--server NAME` selects a specific server. `--server-url` + `--api-key` provides one-off credentials.
+
 ### Configuration
-- Secrets (API key, URL) go in `.env` at the repo root — never in TOML or committed files
-- Use `--env-file .env.prod` to target the production server
-- Use `--server-type jellyfin` (or `SERVER_TYPE=jellyfin` in `.env`) to target Jellyfin
+- API keys go in `.env` at the repo root as `{LABEL}_API_KEY` — never in TOML or committed files
+- Use `--env-file .env.prod` to target production credentials
 - Word lists, library path, and genre allow-list go in `explicit_config.toml` (copy from `explicit_config.example.toml`)
 - Only `explicit_config.example.toml` is committed; all other TOML variants are gitignored
-- `lyrics_priority` (`"sidecar"` | `"embedded"` | `"most_explicit"`, default `"sidecar"`): when `embedded_lyrics` is on and a track has both a sidecar and embedded lyrics, controls which source wins. `most_explicit` picks whichever detected the higher tier. Applies to both Emby and Jellyfin.
+- `overwrite` (default `true`): when true, `rate` re-evaluates all tracks including clearing ratings from clean tracks; when false, skips tracks with existing ratings (`--skip-existing`)
 
 ## CI
 
