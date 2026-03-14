@@ -1331,7 +1331,24 @@ def process_library(config: Config) -> list[DetectionResult]:
             matched_genre = match_g_genre(item, config.g_genres)
             if matched_genre is not None:
                 if not config.overwrite and prev_rating:
-                    # --skip-existing: don't override with genre-based G
+                    dr = DetectionResult(
+                        sidecar_path=None,
+                        audio_path=Path(norm_path) if norm_path else None,
+                        tier="G",
+                        matched_words=[matched_genre],
+                        server_item_id=item_id,
+                        previous_rating=prev_rating,
+                        artist=artist,
+                        album=album,
+                        source="genre",
+                    )
+                    dr.action = "skipped"
+                    log.debug(
+                        "Skipping genre match (has rating %s): %s",
+                        prev_rating,
+                        norm_path,
+                    )
+                    results.append(dr)
                     continue
                 dr = DetectionResult(
                     sidecar_path=None,
@@ -1803,7 +1820,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--overwrite",
         action="store_true",
         default=None,
-        help="Re-evaluate and update tracks that already have a rating (default)",
+        help="Overwrite existing ratings (default)",
     )
     force_parser.add_argument(
         "--skip-existing",
