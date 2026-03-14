@@ -100,10 +100,20 @@ class MediaServerError(Exception):
 
 
 @dataclass
+class ServerConfig:
+    """Named server configuration — one per [servers.*] TOML section."""
+
+    name: str
+    url: str
+    api_key: str
+    server_type: str = ""  # auto-detected via /System/Info/Public
+
+
+@dataclass
 class Config:
     library_paths: list[Path]
-    server_url: str  # "" in "both" mode; use emby_url/jellyfin_url instead
-    server_api_key: str  # "" in "both" mode; use emby_api_key/jellyfin_api_key instead
+    server_url: str
+    server_api_key: str
     server_type: str = "emby"
     r_stems: list[str] = field(default_factory=lambda: list(DEFAULT_R_STEMS))
     r_exact: list[str] = field(default_factory=lambda: list(DEFAULT_R_EXACT))
@@ -117,18 +127,18 @@ class Config:
     force_rating: str | None = None
     report_path: Path | None = None
     g_genres: list[str] = field(default_factory=list)
-    # Per-server credentials — populated from env vars, .env file, or TOML
-    # [emby]/[jellyfin] sections; used by main() to build derived configs in
-    # --server-type both mode.
+    # Per-server credentials — populated by legacy env var fallback in
+    # _resolve_servers(); removed in PR B (#39).
     emby_url: str = ""
     emby_api_key: str = ""
     jellyfin_url: str = ""
     jellyfin_api_key: str = ""
+    servers: list[ServerConfig] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if self.server_type not in ("emby", "jellyfin", "both"):
+        if self.server_type not in ("emby", "jellyfin"):
             raise ValueError(
-                f"server_type must be 'emby', 'jellyfin', or 'both', got {self.server_type!r}"
+                f"server_type must be 'emby' or 'jellyfin', got {self.server_type!r}"
             )
         self._r_exact_patterns = _compile_exact_patterns(self.r_exact)
         self._pg13_exact_patterns = _compile_exact_patterns(self.pg13_exact)
@@ -219,6 +229,243 @@ def load_toml_config(path: Path) -> dict:
         return {}
 
 
+def detect_server_type(url: str) -> str:
+    """Auto-detect server type via GET /System/Info/Public (unauthenticated).
+
+    Returns ``"emby"`` or ``"jellyfin"``.
+
+    Primary: ``ProductName == "Jellyfin Server"`` → Jellyfin; else Emby.
+    Fallback: ``Server`` response header — ``Kestrel`` → Jellyfin; else Emby.
+    Raises ``MediaServerError`` if the endpoint is unreachable.
+    """
+    clean_url = url.rstrip("/")
+    endpoint = f"{clean_url}/System/Info/Public"
+    req = urllib.request.Request(endpoint)
+    req.add_header("Accept", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            server_header = resp.headers.get("Server", "")
+            try:
+                data = json.loads(resp.read())
+                if data.get("ProductName") == "Jellyfin Server":
+                    log.info("Auto-detected Jellyfin at %s", clean_url)
+                    return "jellyfin"
+                log.info("Auto-detected Emby at %s", clean_url)
+                return "emby"
+            except (json.JSONDecodeError, AttributeError):
+                pass
+            # Fallback: Server header
+            if "Kestrel" in server_header:
+                log.info("Auto-detected Jellyfin (via Server header) at %s", clean_url)
+                return "jellyfin"
+            log.info("Auto-detected Emby (via Server header fallback) at %s", clean_url)
+            return "emby"
+    except (urllib.error.URLError, OSError) as exc:
+        raise MediaServerError(
+            f"Cannot reach {endpoint} to auto-detect server type: {exc}"
+        ) from exc
+
+
+def _resolve_servers(
+    args: argparse.Namespace,
+    toml: dict,
+    env_file: dict[str, str],
+) -> list[ServerConfig]:
+    """Resolve server list from CLI overrides, TOML [servers.*], or legacy env vars.
+
+    Precedence:
+    1. ``--server-url`` + ``--api-key`` → single one-off server
+    2. TOML ``[servers.*]`` sections → named servers
+    3. Legacy ``EMBY_URL``/``JELLYFIN_URL`` env vars → synthetic named servers
+
+    For each server without an explicit ``type``, auto-detects via
+    ``/System/Info/Public``.
+    """
+    cli_server_url = (getattr(args, "server_url", None) or "").strip()
+    cli_api_key = (getattr(args, "api_key", None) or "").strip()
+
+    # --- 1. CLI one-off override ---
+    if cli_server_url and cli_api_key:
+        server_type = detect_server_type(cli_server_url)
+        return [
+            ServerConfig(
+                name="cli",
+                url=cli_server_url.rstrip("/"),
+                api_key=cli_api_key,
+                server_type=server_type,
+            )
+        ]
+    if cli_server_url or cli_api_key:
+        print(
+            "Error: --server-url and --api-key must both be provided together.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # --- 2. TOML [servers.*] sections ---
+    toml_servers = toml.get("servers", {})
+    if toml_servers and isinstance(toml_servers, dict):
+        servers: list[ServerConfig] = []
+        for name, srv_conf in toml_servers.items():
+            if not isinstance(srv_conf, dict):
+                continue
+            url = str(srv_conf.get("url", "")).strip()
+            if not url:
+                print(
+                    f"Error: server '{name}' in config has no 'url'.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            # API key: {LABEL_UPPER}_API_KEY (hyphens → underscores)
+            env_key_name = f"{name.upper().replace('-', '_')}_API_KEY"
+            api_key = (
+                os.environ.get(env_key_name, "") or env_file.get(env_key_name, "")
+            ).strip()
+            if not api_key:
+                print(
+                    f"Error: no API key for server '{name}'. "
+                    f"Set {env_key_name} in your .env file.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            # Server type: explicit override or auto-detect
+            explicit_type = str(srv_conf.get("type", "")).strip().lower()
+            if explicit_type:
+                if explicit_type not in ("emby", "jellyfin"):
+                    print(
+                        f"Error: server '{name}' has invalid type "
+                        f"'{explicit_type}' (must be 'emby' or 'jellyfin').",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                server_type = explicit_type
+            else:
+                server_type = detect_server_type(url)
+            servers.append(
+                ServerConfig(
+                    name=name,
+                    url=url.rstrip("/"),
+                    api_key=api_key,
+                    server_type=server_type,
+                )
+            )
+        if servers:
+            return servers
+
+    # --- 3. Legacy env var fallback ---
+    emby_url = (
+        os.environ.get("EMBY_URL", "")
+        or env_file.get("EMBY_URL", "")
+        or str(toml.get("emby", {}).get("url", "") or "")
+    ).strip()
+    emby_api_key = (
+        os.environ.get("EMBY_API_KEY", "") or env_file.get("EMBY_API_KEY", "")
+    ).strip()
+    jellyfin_url = (
+        os.environ.get("JELLYFIN_URL", "")
+        or env_file.get("JELLYFIN_URL", "")
+        or str(toml.get("jellyfin", {}).get("url", "") or "")
+    ).strip()
+    jellyfin_api_key = (
+        os.environ.get("JELLYFIN_API_KEY", "") or env_file.get("JELLYFIN_API_KEY", "")
+    ).strip()
+
+    # Respect explicit --server-type during transition (PR B removes this)
+    explicit_type = (
+        (
+            (getattr(args, "server_type", None) or "")
+            or os.environ.get("SERVER_TYPE", "")
+            or env_file.get("SERVER_TYPE", "")
+            or str(toml.get("general", {}).get("server_type", "") or "")
+        )
+        .lower()
+        .strip()
+    )
+
+    servers = []
+    if explicit_type == "both":
+        if emby_url and emby_api_key:
+            servers.append(
+                ServerConfig("emby", emby_url.rstrip("/"), emby_api_key, "emby")
+            )
+        if jellyfin_url and jellyfin_api_key:
+            servers.append(
+                ServerConfig(
+                    "jellyfin",
+                    jellyfin_url.rstrip("/"),
+                    jellyfin_api_key,
+                    "jellyfin",
+                )
+            )
+        if len(servers) < 2:
+            missing = []
+            if not emby_url or not emby_api_key:
+                missing.append("EMBY_URL/EMBY_API_KEY")
+            if not jellyfin_url or not jellyfin_api_key:
+                missing.append("JELLYFIN_URL/JELLYFIN_API_KEY")
+            print(
+                f"Error: --server-type both requires {' and '.join(missing)}.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    elif explicit_type == "jellyfin":
+        url = jellyfin_url
+        key = jellyfin_api_key
+        if not url or not key:
+            print(
+                "Error: Jellyfin requires JELLYFIN_URL and JELLYFIN_API_KEY.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        servers.append(ServerConfig("jellyfin", url.rstrip("/"), key, "jellyfin"))
+    elif explicit_type == "emby":
+        url = emby_url
+        key = emby_api_key
+        if not url or not key:
+            print(
+                "Error: Emby requires EMBY_URL and EMBY_API_KEY.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        servers.append(ServerConfig("emby", url.rstrip("/"), key, "emby"))
+    else:
+        # Auto-detect: use whichever is configured
+        if emby_url and emby_api_key:
+            stype = detect_server_type(emby_url) if not explicit_type else "emby"
+            servers.append(
+                ServerConfig("emby", emby_url.rstrip("/"), emby_api_key, stype)
+            )
+        if jellyfin_url and jellyfin_api_key:
+            stype = (
+                detect_server_type(jellyfin_url) if not explicit_type else "jellyfin"
+            )
+            servers.append(
+                ServerConfig(
+                    "jellyfin",
+                    jellyfin_url.rstrip("/"),
+                    jellyfin_api_key,
+                    stype,
+                )
+            )
+        if not servers:
+            print(
+                "Error: no server configured. Set server credentials in .env "
+                "or add [servers.*] sections to the TOML config.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if len(servers) > 1 and not explicit_type:
+            print(
+                "Error: multiple servers configured. Use --server-type emby, "
+                "--server-type jellyfin, --server-type both, or migrate to "
+                "[servers.*] TOML sections and use --server NAME to select.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    return servers
+
+
 def build_config(args: argparse.Namespace) -> Config:
     """Merge config layers with precedence: CLI > os.environ > .env > TOML > defaults."""
     script_dir = Path(__file__).resolve().parent
@@ -274,87 +521,25 @@ def build_config(args: argparse.Namespace) -> Config:
         )
         sys.exit(1)
 
-    # --- server_type (explicit override, or auto-detected from which env vars are set) ---
-    explicit_type = (
-        (
-            (getattr(args, "server_type", None) or "")
-            or os.environ.get("SERVER_TYPE", "")
-            or env_file.get("SERVER_TYPE", "")
-            or str(toml.get("general", {}).get("server_type", "") or "")
-        )
-        .lower()
-        .strip()
-    )
+    # --- Resolve servers ---
+    servers = _resolve_servers(args, toml, env_file)
 
-    # --- Resolve both credential pairs unconditionally ---
-    cli_server_url = getattr(args, "server_url", None) or ""
-    cli_api_key = getattr(args, "api_key", None) or ""
-
-    emby_url = (
-        os.environ.get("EMBY_URL", "")
-        or env_file.get("EMBY_URL", "")
-        or toml.get("emby", {}).get("url", "")
-    ).strip()
-    emby_api_key = (
-        os.environ.get("EMBY_API_KEY", "") or env_file.get("EMBY_API_KEY", "") or ""
-    ).strip()
-    jellyfin_url = (
-        os.environ.get("JELLYFIN_URL", "")
-        or env_file.get("JELLYFIN_URL", "")
-        or toml.get("jellyfin", {}).get("url", "")
-    ).strip()
-    jellyfin_api_key = (
-        os.environ.get("JELLYFIN_API_KEY", "")
-        or env_file.get("JELLYFIN_API_KEY", "")
-        or ""
-    ).strip()
-
-    has_emby_url = bool(emby_url)
-    has_jellyfin_url = bool(jellyfin_url)
-
-    if explicit_type:
-        server_type = explicit_type
-        if server_type == "both":
-            if cli_server_url or cli_api_key:
+    # --- Filter by --server NAME (if specified) ---
+    selected = getattr(args, "server", None) or []
+    if selected:
+        known = {s.name for s in servers}
+        for name in selected:
+            if name not in known:
+                avail = ", ".join(sorted(known))
                 print(
-                    "Error: --server-url and --api-key are not supported with --server-type both. "
-                    "Set credentials via EMBY_URL/EMBY_API_KEY and JELLYFIN_URL/JELLYFIN_API_KEY.",
+                    f"Error: unknown server '{name}'. Available: {avail}",
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            if not emby_url or not emby_api_key:
-                print(
-                    "Error: --server-type both requires EMBY_URL and EMBY_API_KEY",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            if not jellyfin_url or not jellyfin_api_key:
-                print(
-                    "Error: --server-type both requires JELLYFIN_URL and JELLYFIN_API_KEY",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-    else:
-        if has_emby_url and has_jellyfin_url:
-            print(
-                "Error: both Emby and Jellyfin are configured; "
-                "use --server-type emby, --server-type jellyfin, or --server-type both to select.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        server_type = "jellyfin" if has_jellyfin_url else "emby"
+        servers = [s for s in servers if s.name in selected]
 
-    # --- server_url / server_api_key for single-server mode ---
-    if server_type == "both":
-        # Unused in "both" mode — main() uses per-server fields from Config directly
-        server_url = ""
-        server_api_key = ""
-    elif server_type == "jellyfin":
-        server_url = cli_server_url or jellyfin_url
-        server_api_key = cli_api_key or jellyfin_api_key
-    else:
-        server_url = cli_server_url or emby_url
-        server_api_key = cli_api_key or emby_api_key
+    # Backward-compat: set server_url/api_key/type from first resolved server
+    active = servers[0] if servers else ServerConfig("", "", "", "emby")
 
     # --- word lists (TOML or defaults) ---
     det = toml.get("detection", {})
@@ -374,9 +559,9 @@ def build_config(args: argparse.Namespace) -> Config:
 
     return Config(
         library_paths=library_paths,
-        server_url=server_url.rstrip("/"),
-        server_api_key=server_api_key,
-        server_type=server_type,
+        server_url=active.url,
+        server_api_key=active.api_key,
+        server_type=active.server_type,
         r_stems=r_stems,
         r_exact=r_exact,
         pg13_stems=pg13_stems,
@@ -387,10 +572,11 @@ def build_config(args: argparse.Namespace) -> Config:
         force_rating=getattr(args, "rating", None),
         report_path=report_path,
         g_genres=g_genres,
-        emby_url=emby_url.rstrip("/"),
-        emby_api_key=emby_api_key,
-        jellyfin_url=jellyfin_url.rstrip("/"),
-        jellyfin_api_key=jellyfin_api_key,
+        emby_url=active.url if active.server_type == "emby" else "",
+        emby_api_key=active.api_key if active.server_type == "emby" else "",
+        jellyfin_url=active.url if active.server_type == "jellyfin" else "",
+        jellyfin_api_key=active.api_key if active.server_type == "jellyfin" else "",
+        servers=servers,
     )
 
 
@@ -1164,13 +1350,6 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
 
 def list_genres_mode(config: Config) -> None:
     """'genres' subcommand: print all Audio genre names from the server to stdout. Exits with non-zero status on error."""
-    if config.server_type == "both":
-        print(
-            "Error: 'genres' is not supported with --server-type both. "
-            "Run separately with --server-type emby and --server-type jellyfin.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
     if not config.server_url or not config.server_api_key:
         print(
             "Error: 'genres' requires server URL and API key "
@@ -1316,8 +1495,9 @@ subcommands:
 
 examples:
   %(prog)s scan /path/to/music --dry-run --report report.csv
+  %(prog)s scan --server home-emby --dry-run
   %(prog)s rate /path/to/classical G
-  %(prog)s genres --server-type jellyfin
+  %(prog)s genres
 """
 
 
@@ -1349,6 +1529,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--api-key",
         default=None,
         help="API key — overrides the env var for the active server type",
+    )
+    shared.add_argument(
+        "--server",
+        action="append",
+        default=None,
+        dest="server",
+        metavar="NAME",
+        help="Target a named server (repeatable; e.g. --server home-emby --server home-jellyfin)",
     )
     shared.add_argument(
         "-v",
@@ -1544,8 +1732,6 @@ def main() -> None:
 
     setup_logging(args.verbose)
 
-    # ValueError is raised by Config.__post_init__ for invalid field values
-    # (e.g. unrecognised server_type). Other config errors call sys.exit() directly.
     try:
         config = build_config(args)
     except ValueError as exc:
@@ -1555,65 +1741,50 @@ def main() -> None:
         list_genres_mode(config)
         return
 
-    if config.server_type == "both":
-        emby_cfg = replace(
-            config,
-            server_type="emby",
-            server_url=config.emby_url,
-            server_api_key=config.emby_api_key,
-        )
-        jf_cfg = replace(
-            config,
-            server_type="jellyfin",
-            server_url=config.jellyfin_url,
-            server_api_key=config.jellyfin_api_key,
-        )
-        log.info("--- Starting Emby run ---")
-        if config.force_rating:
-            try:
-                emby_results = force_rate_library(emby_cfg)
-            except SystemExit as exc:
-                log.error(
-                    "Emby run failed (exit code %s); Jellyfin run will still proceed.",
-                    exc.code,
-                )
-                emby_results = []
-        else:
-            try:
-                emby_results = process_library(emby_cfg)
-            except SystemExit as exc:
-                log.error(
-                    "Emby run failed (exit code %s); Jellyfin run will still proceed.",
-                    exc.code,
-                )
-                emby_results = []
+    all_results: list[DetectionResult] = []
+    multi = len(config.servers) > 1
 
-        log.info("--- Starting Jellyfin run ---")
+    for server in config.servers:
+        srv_config = replace(
+            config,
+            server_url=server.url,
+            server_api_key=server.api_key,
+            server_type=server.server_type,
+        )
+        label = f"{server.name} ({server.server_type.title()})" if multi else ""
+        if label:
+            log.info("--- Processing %s ---", label)
+
         if config.force_rating:
             try:
-                jf_results = force_rate_library(jf_cfg)
+                results = force_rate_library(srv_config)
             except SystemExit as exc:
-                log.error("Jellyfin run failed (exit code %s).", exc.code)
-                jf_results = []
+                log.error(
+                    "%s failed (exit %s).",
+                    label or "Server",
+                    exc.code,
+                )
+                results = []
         else:
             try:
-                jf_results = process_library(jf_cfg)
+                results = process_library(srv_config)
             except SystemExit as exc:
-                log.error("Jellyfin run failed (exit code %s).", exc.code)
-                jf_results = []
-        results = emby_results + jf_results
-        if config.report_path:
-            write_report(results, config.report_path, config.library_paths)
-        print_summary(emby_results, label="Emby")
-        print_summary(jf_results, label="Jellyfin")
-    else:
-        if config.force_rating:
-            results = force_rate_library(config)
-        else:
-            results = process_library(config)
-        if config.report_path:
-            write_report(results, config.report_path, config.library_paths)
-        print_summary(results)
+                log.error(
+                    "%s failed (exit %s).",
+                    label or "Server",
+                    exc.code,
+                )
+                results = []
+
+        all_results.extend(results)
+        if multi:
+            print_summary(results, label=label)
+
+    if config.report_path:
+        write_report(all_results, config.report_path, config.library_paths)
+
+    if not multi:
+        print_summary(all_results)
 
 
 if __name__ == "__main__":
