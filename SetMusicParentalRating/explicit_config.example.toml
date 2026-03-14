@@ -6,26 +6,29 @@
 # Environment files:
 #   The script loads .env from the repo root by default.
 #   Use --env-file to load a different file (e.g. --env-file .env.prod).
-#   To connect to Emby, set EMBY_API_KEY and EMBY_URL in your .env.
-#   To connect to Jellyfin, set JELLYFIN_API_KEY and JELLYFIN_URL in your .env
-#   and set SERVER_TYPE=jellyfin (or use --server-type jellyfin on the CLI).
-#   To sync both servers in one pass, set both credential pairs and use SERVER_TYPE=both.
 
-[general]
-# server_type = "emby"   # Uncomment to force "emby", "jellyfin", or "both"; leave unset to auto-detect
-# Library path(s) to scan. Accepts a single string or a TOML array of strings.
-# Can also be passed as positional CLI argument(s) or via TAGLRC_LIBRARY_PATH env var.
-#   library_path = "/mnt/d/Music"
-#   library_path = ["/mnt/d/Music", "/mnt/d/Classical"]
-library_path = ""
+# --- Named servers (preferred) ---
+# Define one or more servers. API keys go in .env as {LABEL_UPPER}_API_KEY
+# (hyphens in label → underscores in env var name).
+# Server type (emby/jellyfin) is auto-detected; set type = "emby" or
+# type = "jellyfin" to override.
+#
+# [servers.home-emby]
+# url = "http://192.168.1.126:8096"
+#
+# [servers.home-jellyfin]
+# url = "http://192.168.1.126:8097"
 
+# --- Legacy server config ---
 [emby]
 url = "http://localhost:8096"
-# API key goes in .env file as EMBY_API_KEY — do not put secrets in this file.
 
 [jellyfin]
 url = "http://localhost:8097"
-# API key goes in .env file as JELLYFIN_API_KEY — do not put secrets in this file.
+
+[general]
+# server_type = "emby"   # Legacy; auto-detected when using [servers.*]
+library_path = ""
 
 [detection]
 
@@ -60,12 +63,7 @@ false_positives = [
 ]
 
 [detection.g_genres]
-# Genres (case-insensitive) that identify instrumental/clean tracks → G rating.
-# Run `python3 SetMusicParentalRating.py --list-genres` to see your library's genre tags.
-# Leave empty (or omit section) to disable this feature.
 genres = []
-# Example values (uncomment and edit to enable):
-# genres = ["Classical", "Ambient", "Instrumental", "Video Game Music", "Chiptune"]
 
 [report]
 output_path = "explicit_report.csv"
