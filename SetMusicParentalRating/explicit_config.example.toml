@@ -6,29 +6,22 @@
 # Environment files:
 #   The script loads .env from the repo root by default.
 #   Use --env-file to load a different file (e.g. --env-file .env.prod).
+#   API keys go in .env as {LABEL_UPPER}_API_KEY (hyphens → underscores).
 
-# --- Named servers (preferred) ---
-# Define one or more servers. API keys go in .env as {LABEL_UPPER}_API_KEY
-# (hyphens in label → underscores in env var name).
-# Server type (emby/jellyfin) is auto-detected; set type = "emby" or
-# type = "jellyfin" to override.
-#
-# [servers.home-emby]
-# url = "http://192.168.1.126:8096"
-#
-# [servers.home-jellyfin]
-# url = "http://192.168.1.126:8097"
+# --- Servers ---
+# Server type (emby/jellyfin) is auto-detected from the server's API.
+# Set type = "emby" or type = "jellyfin" to override auto-detection.
 
-# --- Legacy server config ---
-[emby]
+[servers.home-emby]
 url = "http://localhost:8096"
 
-[jellyfin]
+[servers.home-jellyfin]
 url = "http://localhost:8097"
 
 [general]
-# server_type = "emby"   # Legacy; auto-detected when using [servers.*]
 library_path = ""
+# overwrite = true  # Re-evaluate tracks that already have a rating (default)
+# overwrite = false  # Skip tracks that already have any rating (--skip-existing)
 
 [detection]
 

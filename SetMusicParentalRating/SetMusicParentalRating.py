@@ -123,17 +123,13 @@ class Config:
         default_factory=lambda: list(DEFAULT_FALSE_POSITIVES)
     )
     dry_run: bool = False
-    clear: bool = False
+    overwrite: bool = True  # default: re-evaluate and overwrite
     force_rating: str | None = None
     report_path: Path | None = None
     g_genres: list[str] = field(default_factory=list)
-    # Per-server credentials — populated by legacy env var fallback in
-    # _resolve_servers(); removed in PR B (#39).
-    emby_url: str = ""
-    emby_api_key: str = ""
-    jellyfin_url: str = ""
-    jellyfin_api_key: str = ""
     servers: list[ServerConfig] = field(default_factory=list)
+    library_name: str | None = None
+    location_name: str | None = None
 
     def __post_init__(self) -> None:
         if self.server_type not in ("emby", "jellyfin"):
@@ -160,7 +156,7 @@ class DetectionResult:
     previous_rating: str = ""
     artist: str = ""
     album: str = ""
-    source: str = ""  # "lyrics" | "genre" | "force"
+    source: str = ""  # "lyrics" | "genre" | "force" | "reset"
     server_type: str = (
         ""  # "emby" | "jellyfin"; populated by process_library / force_rate_library
     )
@@ -175,19 +171,7 @@ def load_env(path: Path, *, required: bool = False) -> dict[str, str]:
     """Parse a .env file into a dict. Skips comments and blank lines."""
     env: dict[str, str] = {}
     if not path.is_file():
-        has_emby = bool((os.environ.get("EMBY_URL") or "").strip()) and bool(
-            (os.environ.get("EMBY_API_KEY") or "").strip()
-        )
-        has_jellyfin = bool((os.environ.get("JELLYFIN_URL") or "").strip()) and bool(
-            (os.environ.get("JELLYFIN_API_KEY") or "").strip()
-        )
-        if has_emby or has_jellyfin:
-            log.debug(
-                ".env file not found at %s (credentials provided via environment variables)",
-                path,
-            )
-        else:
-            log.warning(".env file not found at %s", path)
+        log.warning(".env file not found at %s", path)
         return env
     try:
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -280,12 +264,11 @@ def _resolve_servers(
     toml: dict,
     env_file: dict[str, str],
 ) -> list[ServerConfig]:
-    """Resolve server list from CLI overrides, TOML [servers.*], or legacy env vars.
+    """Resolve server list from CLI overrides or TOML [servers.*] sections.
 
     Precedence:
     1. ``--server-url`` + ``--api-key`` → single one-off server
     2. TOML ``[servers.*]`` sections → named servers
-    3. Legacy ``EMBY_URL``/``JELLYFIN_URL`` env vars → synthetic named servers
 
     For each server without an explicit ``type``, auto-detects via
     ``/System/Info/Public``.
@@ -397,118 +380,13 @@ def _resolve_servers(
         if servers:
             return servers
 
-    # --- 3. Legacy env var fallback ---
-    emby_url = (
-        os.environ.get("EMBY_URL", "")
-        or env_file.get("EMBY_URL", "")
-        or str(toml.get("emby", {}).get("url", "") or "")
-    ).strip()
-    emby_api_key = (
-        os.environ.get("EMBY_API_KEY", "") or env_file.get("EMBY_API_KEY", "")
-    ).strip()
-    jellyfin_url = (
-        os.environ.get("JELLYFIN_URL", "")
-        or env_file.get("JELLYFIN_URL", "")
-        or str(toml.get("jellyfin", {}).get("url", "") or "")
-    ).strip()
-    jellyfin_api_key = (
-        os.environ.get("JELLYFIN_API_KEY", "") or env_file.get("JELLYFIN_API_KEY", "")
-    ).strip()
-
-    # Respect explicit --server-type during transition (PR B removes this)
-    explicit_type = (
-        (
-            (getattr(args, "server_type", None) or "")
-            or os.environ.get("SERVER_TYPE", "")
-            or env_file.get("SERVER_TYPE", "")
-            or str(toml.get("general", {}).get("server_type", "") or "")
-        )
-        .lower()
-        .strip()
+    # --- 3. No servers configured ---
+    print(
+        "Error: no servers configured. Add [servers.*] sections to the TOML "
+        "config, or use --server-url and --api-key for a one-off run.",
+        file=sys.stderr,
     )
-
-    servers = []
-    if explicit_type == "both":
-        if emby_url and emby_api_key:
-            servers.append(
-                ServerConfig("emby", emby_url.rstrip("/"), emby_api_key, "emby")
-            )
-        if jellyfin_url and jellyfin_api_key:
-            servers.append(
-                ServerConfig(
-                    "jellyfin",
-                    jellyfin_url.rstrip("/"),
-                    jellyfin_api_key,
-                    "jellyfin",
-                )
-            )
-        if len(servers) < 2:
-            missing = []
-            if not emby_url or not emby_api_key:
-                missing.append("EMBY_URL/EMBY_API_KEY")
-            if not jellyfin_url or not jellyfin_api_key:
-                missing.append("JELLYFIN_URL/JELLYFIN_API_KEY")
-            print(
-                f"Error: --server-type both requires {' and '.join(missing)}.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-    elif explicit_type == "jellyfin":
-        url = jellyfin_url
-        key = jellyfin_api_key
-        if not url or not key:
-            print(
-                "Error: Jellyfin requires JELLYFIN_URL and JELLYFIN_API_KEY.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        servers.append(ServerConfig("jellyfin", url.rstrip("/"), key, "jellyfin"))
-    elif explicit_type == "emby":
-        url = emby_url
-        key = emby_api_key
-        if not url or not key:
-            print(
-                "Error: Emby requires EMBY_URL and EMBY_API_KEY.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        servers.append(ServerConfig("emby", url.rstrip("/"), key, "emby"))
-    else:
-        # Auto-detect: use whichever is configured
-        if emby_url and emby_api_key:
-            stype = detect_server_type(emby_url) if not explicit_type else "emby"
-            servers.append(
-                ServerConfig("emby", emby_url.rstrip("/"), emby_api_key, stype)
-            )
-        if jellyfin_url and jellyfin_api_key:
-            stype = (
-                detect_server_type(jellyfin_url) if not explicit_type else "jellyfin"
-            )
-            servers.append(
-                ServerConfig(
-                    "jellyfin",
-                    jellyfin_url.rstrip("/"),
-                    jellyfin_api_key,
-                    stype,
-                )
-            )
-        if not servers:
-            print(
-                "Error: no server configured. Set server credentials in .env "
-                "or add [servers.*] sections to the TOML config.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        if len(servers) > 1 and not explicit_type:
-            print(
-                "Error: multiple servers configured. Use --server-type emby, "
-                "--server-type jellyfin, --server-type both, or migrate to "
-                "[servers.*] TOML sections and use --server NAME to select.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    return servers
+    sys.exit(1)
 
 
 def build_config(args: argparse.Namespace) -> Config:
@@ -550,7 +428,12 @@ def build_config(args: argparse.Namespace) -> Config:
             elif toml_lp:
                 raw_paths = [toml_lp]
 
-    if not raw_paths and getattr(args, "command", None) != "genres":
+    has_scope = getattr(args, "library", None) or getattr(args, "location", None)
+    if (
+        not raw_paths
+        and getattr(args, "command", None) not in ("reset",)
+        and not has_scope
+    ):
         print(
             "Error: library_path is required. Provide it via command-line argument, "
             "TAGLRC_LIBRARY_PATH environment variable, or [general].library_path in the TOML config.",
@@ -589,6 +472,30 @@ def build_config(args: argparse.Namespace) -> Config:
     )
     report_path = Path(report_path_str) if report_path_str else None
 
+    # Overwrite behavior: CLI > TOML > default (True)
+    cli_overwrite = getattr(args, "overwrite", None)
+    cli_skip = getattr(args, "skip_existing", None)
+    if cli_overwrite and cli_skip:
+        print(
+            "Error: --overwrite and --skip-existing are mutually exclusive.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if cli_skip:
+        overwrite = False
+    elif cli_overwrite:
+        overwrite = True
+    else:
+        raw_overwrite = toml.get("general", {}).get("overwrite", True)
+        if not isinstance(raw_overwrite, bool):
+            print(
+                f"Error: [general].overwrite must be true or false, "
+                f"got {raw_overwrite!r}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        overwrite = raw_overwrite
+
     return Config(
         library_paths=library_paths,
         server_url=active.url,
@@ -600,15 +507,13 @@ def build_config(args: argparse.Namespace) -> Config:
         pg13_exact=pg13_exact,
         false_positives=false_positives,
         dry_run=getattr(args, "dry_run", False),
-        clear=getattr(args, "clear", False),
+        overwrite=overwrite,
         force_rating=getattr(args, "rating", None),
         report_path=report_path,
         g_genres=g_genres,
-        emby_url=active.url if active.server_type == "emby" else "",
-        emby_api_key=active.api_key if active.server_type == "emby" else "",
-        jellyfin_url=active.url if active.server_type == "jellyfin" else "",
-        jellyfin_api_key=active.api_key if active.server_type == "jellyfin" else "",
         servers=servers,
+        library_name=getattr(args, "library", None),
+        location_name=getattr(args, "location", None),
     )
 
 
@@ -821,7 +726,7 @@ class MediaServerClient:
             ) from exc
 
     def prefetch_audio_items(
-        self, *, include_media_sources: bool = False
+        self, *, include_media_sources: bool = False, parent_id: str | None = None
     ) -> dict[str, dict]:
         """Paginated fetch of all Audio items. Returns {normalized_path: item}.
 
@@ -829,6 +734,9 @@ class MediaServerClient:
         parameter on Emby (includes embedded lyrics in MediaStreams.Extradata at
         the cost of a larger payload). On Jellyfin this flag has no effect —
         embedded lyrics are fetched per-track via /Audio/{id}/Lyrics by the caller.
+
+        Pass parent_id to scope the query to a specific library (ItemId from
+        /Library/VirtualFolders).
         """
         fields = "Path,OfficialRating,AlbumArtist,Album,Genres"
         if include_media_sources and self.server_type == "emby":
@@ -839,10 +747,11 @@ class MediaServerClient:
         total = 0
         uid = self._get_user_id()
         while True:
+            parent_filter = f"&ParentId={parent_id}" if parent_id else ""
             result = self._request(
                 "GET",
                 f"/Users/{uid}/Items?Recursive=true&IncludeItemTypes=Audio"
-                f"&Fields={fields}"
+                f"&Fields={fields}{parent_filter}"
                 f"&StartIndex={start_index}&Limit={page_size}",
             )
             if not result:
@@ -1058,6 +967,34 @@ class MediaServerClient:
         ]
         return sorted(names, key=str.casefold)
 
+    def discover_libraries(self) -> list[dict]:
+        """GET /Library/VirtualFolders — return music libraries.
+
+        Each entry has ``Name``, ``ItemId``, ``Locations`` (list of path
+        strings), and ``CollectionType``.  Only libraries with
+        ``CollectionType == "music"`` are returned.
+        """
+        result = self._request("GET", "/Library/VirtualFolders")
+        if result is None:
+            log.warning("discover_libraries: server returned empty body")
+            return []
+        if not isinstance(result, list):
+            log.warning(
+                "discover_libraries: unexpected response type: %r", type(result)
+            )
+            return []
+        music_libs = [
+            lib
+            for lib in result
+            if isinstance(lib, dict) and lib.get("CollectionType") == "music"
+        ]
+        log.info(
+            "Discovered %d music library/libraries: %s",
+            len(music_libs),
+            ", ".join(lib.get("Name", "?") for lib in music_libs),
+        )
+        return music_libs
+
 
 def _normalize_path(p: str) -> str:
     """Normalize a path for dict lookup, handling mixed separators."""
@@ -1176,6 +1113,116 @@ def _is_under_roots(norm_path: str, lib_roots: list[Path]) -> bool:
     return any(p.is_relative_to(r) for r in lib_roots)
 
 
+def _resolve_library_scope(
+    client: MediaServerClient,
+    library_name: str | None,
+    location_name: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve --library/--location to a ParentId and optional location path.
+
+    Returns ``(parent_id, location_path)``:
+    - ``parent_id``: the ``ItemId`` of the matched library (for the prefetch
+      query's ``ParentId`` parameter), or ``None`` to fetch all items.
+    - ``location_path``: the server-side path prefix for the matched location
+      (e.g. ``"/classical"``), or ``None`` if no location scoping is needed.
+      Used for post-prefetch filtering of items.
+    """
+    if not library_name and not location_name:
+        return None, None
+
+    libraries = client.discover_libraries()
+    if not libraries:
+        log.error("No music libraries found on server.")
+        sys.exit(1)
+
+    matched_location_path: str | None = None
+
+    if library_name:
+        match = [
+            lib
+            for lib in libraries
+            if lib.get("Name", "").lower() == library_name.lower()
+        ]
+        if not match:
+            names = ", ".join(lib.get("Name", "?") for lib in libraries)
+            log.error("Library '%s' not found. Available: %s", library_name, names)
+            sys.exit(1)
+        lib = match[0]
+    else:
+        # --location without --library: search all music libraries
+        lib = None
+        for candidate in libraries:
+            for loc_path in candidate.get("Locations") or []:
+                loc_leaf = loc_path.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+                if loc_leaf.lower() == location_name.lower():
+                    lib = candidate
+                    matched_location_path = loc_path
+                    break
+            if lib:
+                break
+        if not lib:
+            all_locs = [
+                loc_path.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+                for candidate in libraries
+                for loc_path in candidate.get("Locations") or []
+            ]
+            log.error(
+                "Location '%s' not found. Available: %s",
+                location_name,
+                ", ".join(all_locs),
+            )
+            sys.exit(1)
+
+    parent_id = lib.get("ItemId", "")
+    if not parent_id:
+        log.error("Library '%s' has no ItemId.", lib.get("Name", "?"))
+        sys.exit(1)
+
+    if location_name and library_name:
+        # Find the specific location within the matched library
+        for loc_path in lib.get("Locations") or []:
+            loc_leaf = loc_path.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+            if loc_leaf.lower() == location_name.lower():
+                matched_location_path = loc_path
+                log.info(
+                    "Scoping to location '%s' in library '%s'",
+                    location_name,
+                    lib.get("Name"),
+                )
+                return parent_id, matched_location_path
+        locs = [
+            loc_path.rstrip("/\\").replace("\\", "/").rsplit("/", 1)[-1]
+            for loc_path in lib.get("Locations") or []
+        ]
+        log.error(
+            "Location '%s' not found in library '%s'. Available: %s",
+            location_name,
+            lib.get("Name"),
+            ", ".join(locs),
+        )
+        sys.exit(1)
+
+    log.info("Scoping to library '%s' (ID: %s)", lib.get("Name"), parent_id)
+    return parent_id, matched_location_path
+
+
+def _filter_by_location(items: dict[str, dict], location_path: str) -> dict[str, dict]:
+    """Post-prefetch filter: keep only items whose normalized path starts with the location path."""
+    prefix = _normalize_path(location_path.rstrip("/\\")) + "/"
+    filtered = {
+        norm_path: item
+        for norm_path, item in items.items()
+        if norm_path.startswith(prefix)
+    }
+    log.info(
+        "Location filter: %d / %d items under %s",
+        len(filtered),
+        len(items),
+        location_path,
+    )
+    return filtered
+
+
 def process_library(config: Config) -> list[DetectionResult]:
     """Fetch lyrics via API, classify, and set ratings.
 
@@ -1186,23 +1233,36 @@ def process_library(config: Config) -> list[DetectionResult]:
     """
     if not config.server_url or not config.server_api_key:
         log.error(
-            "'scan' requires a server URL and API key "
-            "(set EMBY_URL+EMBY_API_KEY or JELLYFIN_URL+JELLYFIN_API_KEY in .env, "
-            "or use --server-url/--api-key)"
+            "'rate' requires a server URL and API key. "
+            "Add [servers.*] sections to the TOML config, "
+            "or use --server-url and --api-key for a one-off run."
         )
         sys.exit(1)
 
     client = MediaServerClient(
         config.server_url, config.server_api_key, config.server_type
     )
+
+    # Resolve library/location scope
+    parent_id, location_path = _resolve_library_scope(
+        client,
+        config.library_name,
+        config.location_name,
+    )
+
     try:
-        server_items = client.prefetch_audio_items(include_media_sources=True)
+        server_items = client.prefetch_audio_items(
+            include_media_sources=True, parent_id=parent_id
+        )
     except MediaServerError as exc:
         log.error("Failed to prefetch server items: %s", exc)
         sys.exit(1)
 
-    # Scope to configured library paths (if provided)
-    if config.library_paths:
+    if location_path:
+        server_items = _filter_by_location(server_items, location_path)
+
+    # Path-based scoping (only when library_paths are provided and no --library/--location)
+    if config.library_paths and parent_id is None:
         _validate_library_paths(config.library_paths)
         lib_roots = [Path(_normalize_path(str(lp))) for lp in config.library_paths]
         items_in_scope = {
@@ -1253,15 +1313,20 @@ def process_library(config: Config) -> list[DetectionResult]:
                 source="lyrics",
             )
             if tier is not None:
-                dr.action = _decide_rating_action(
-                    client=client,
-                    item_id=item_id,
-                    tier=tier,
-                    current_rating=prev_rating,
-                    label=norm_path,
-                    dry_run=config.dry_run,
-                )
-            elif config.clear:
+                if not config.overwrite and prev_rating:
+                    dr.action = "skipped"
+                    log.debug("Skipping (has rating %s): %s", prev_rating, norm_path)
+                else:
+                    dr.action = _decide_rating_action(
+                        client=client,
+                        item_id=item_id,
+                        tier=tier,
+                        current_rating=prev_rating,
+                        label=norm_path,
+                        dry_run=config.dry_run,
+                    )
+            elif config.overwrite and prev_rating:
+                # Lyrics are clean but track has a rating — clear it
                 dr.action = _decide_clear_action(
                     client=client,
                     item_id=item_id,
@@ -1278,6 +1343,26 @@ def process_library(config: Config) -> list[DetectionResult]:
         if config.g_genres:
             matched_genre = match_g_genre(item, config.g_genres)
             if matched_genre is not None:
+                if not config.overwrite and prev_rating:
+                    dr = DetectionResult(
+                        sidecar_path=None,
+                        audio_path=Path(norm_path) if norm_path else None,
+                        tier="G",
+                        matched_words=[matched_genre],
+                        server_item_id=item_id,
+                        previous_rating=prev_rating,
+                        artist=artist,
+                        album=album,
+                        source="genre",
+                    )
+                    dr.action = "skipped"
+                    log.debug(
+                        "Skipping genre match (has rating %s): %s",
+                        prev_rating,
+                        norm_path,
+                    )
+                    results.append(dr)
+                    continue
                 dr = DetectionResult(
                     sidecar_path=None,
                     audio_path=Path(norm_path) if norm_path else None,
@@ -1311,13 +1396,12 @@ def process_library(config: Config) -> list[DetectionResult]:
 
 
 def force_rate_library(config: Config) -> list[DetectionResult]:
-    """'rate' subcommand: set a fixed rating on ALL audio tracks under the
-    library path(s), skipping tracks already at the target rating."""
-    _validate_library_paths(config.library_paths)
+    """'force' subcommand: set a fixed rating on ALL audio tracks in scope."""
     if not config.server_url or not config.server_api_key:
         log.error(
-            "'rate' requires a server URL and API key "
-            "(set EMBY_URL+EMBY_API_KEY or JELLYFIN_URL+JELLYFIN_API_KEY in .env, or use --server-url/--api-key)"
+            "'force' requires a server URL and API key. "
+            "Add [servers.*] sections to the TOML config, "
+            "or use --server-url and --api-key for a one-off run."
         )
         sys.exit(1)
 
@@ -1325,26 +1409,42 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
     client = MediaServerClient(
         config.server_url, config.server_api_key, config.server_type
     )
+
+    # Resolve library/location scope
+    parent_id, location_path = _resolve_library_scope(
+        client,
+        config.library_name,
+        config.location_name,
+    )
+
     try:
-        all_items = client.prefetch_audio_items()
+        all_items = client.prefetch_audio_items(parent_id=parent_id)
     except MediaServerError as exc:
         log.error("Failed to prefetch server items: %s", exc)
         sys.exit(1)
 
-    # Filter to items under the library path(s) (path-aware, avoids /music matching /music2)
-    lib_roots = [Path(_normalize_path(str(lp))) for lp in config.library_paths]
-    items_in_scope = {
-        path: item
-        for path, item in all_items.items()
-        if _is_under_roots(path, lib_roots)
-    }
-    paths_display = ", ".join(str(lp) for lp in config.library_paths)
-    log.info(
-        "Force-rating: %d items under %s (of %d total)",
-        len(items_in_scope),
-        paths_display,
-        len(all_items),
-    )
+    if location_path:
+        all_items = _filter_by_location(all_items, location_path)
+
+    # Path-based scoping (only when library_paths are provided and no --library/--location)
+    if config.library_paths and parent_id is None:
+        _validate_library_paths(config.library_paths)
+        lib_roots = [Path(_normalize_path(str(lp))) for lp in config.library_paths]
+        items_in_scope = {
+            path: item
+            for path, item in all_items.items()
+            if _is_under_roots(path, lib_roots)
+        }
+        paths_display = ", ".join(str(lp) for lp in config.library_paths)
+        log.info(
+            "Force-rating: %d items under %s (of %d total)",
+            len(items_in_scope),
+            paths_display,
+            len(all_items),
+        )
+    else:
+        items_in_scope = all_items
+        log.info("Force-rating all %d items (no library path filter)", len(all_items))
 
     results: list[DetectionResult] = []
     for norm_path, item in items_in_scope.items():
@@ -1364,6 +1464,9 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
             log.warning(
                 "Force-rating: server item at %s has no 'Id'; skipping", norm_path
             )
+        elif not config.overwrite and current:
+            dr.action = "skipped"
+            log.debug("Skipping (has rating %s): %s", current, norm_path)
         elif current == target:
             dr.action = "already_correct"
             log.debug("Already %s: %s", target, norm_path)
@@ -1380,13 +1483,70 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
     return results
 
 
+def reset_library(config: Config) -> list[DetectionResult]:
+    """'reset' subcommand: remove OfficialRating from all audio tracks in scope."""
+    if not config.server_url or not config.server_api_key:
+        log.error("'reset' requires a server URL and API key.")
+        sys.exit(1)
+
+    client = MediaServerClient(
+        config.server_url, config.server_api_key, config.server_type
+    )
+    parent_id, location_path = _resolve_library_scope(
+        client,
+        config.library_name,
+        config.location_name,
+    )
+    try:
+        all_items = client.prefetch_audio_items(parent_id=parent_id)
+    except MediaServerError as exc:
+        log.error("Failed to prefetch server items: %s", exc)
+        sys.exit(1)
+    if location_path:
+        all_items = _filter_by_location(all_items, location_path)
+
+    results: list[DetectionResult] = []
+    for norm_path, item in all_items.items():
+        item_id, current, artist, album = _item_fields(item)
+        dr = DetectionResult(
+            sidecar_path=None,
+            audio_path=Path(norm_path) if norm_path else None,
+            tier=None,
+            server_item_id=item_id,
+            previous_rating=current,
+            artist=artist,
+            album=album,
+            source="reset",
+        )
+        if not item_id:
+            dr.action = "not_found_in_server"
+            log.warning("Reset: server item at %s has no 'Id'; skipping", norm_path)
+        elif not current:
+            dr.action = "skipped"
+            log.debug("No rating to clear: %s", norm_path)
+        elif config.dry_run:
+            dr.action = "dry_run_clear"
+            log.info(
+                "[DRY RUN] Would clear rating from %s (was %s)", norm_path, current
+            )
+        else:
+            action = _apply_rating(client, item_id, "", norm_path)
+            dr.action = "cleared" if action == "set" else action
+        results.append(dr)
+
+    for r in results:
+        if not r.server_type:
+            r.server_type = config.server_type
+    return results
+
+
 def list_genres_mode(config: Config) -> None:
     """'genres' subcommand: print all Audio genre names from the server to stdout. Exits with non-zero status on error."""
     if not config.server_url or not config.server_api_key:
         print(
-            "Error: 'genres' requires server URL and API key "
-            "(set EMBY_URL+EMBY_API_KEY or JELLYFIN_URL+JELLYFIN_API_KEY in .env, or use --server-url/--api-key). "
-            "Use --server-type to select Emby or Jellyfin when both are configured.",
+            "Error: 'genres' requires a server URL and API key. "
+            "Add [servers.*] sections to the TOML config, "
+            "or use --server-url and --api-key for a one-off run.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -1489,47 +1649,47 @@ def _decide_clear_action(
 # ---------------------------------------------------------------------------
 
 
-_SCAN_EXAMPLES = """\
-examples:
-  # Dry run — analyze without touching the server
-  %(prog)s /path/to/music --dry-run --report report.csv
-
-  # Multiple library paths in a single run
-  %(prog)s /path/to/music /path/to/classical --dry-run
-
-  # Clear stale ratings from tracks with clean lyrics
-  %(prog)s /path/to/music --clear
-"""
-
 _RATE_EXAMPLES = """\
 examples:
-  # Rate a known-clean library as G
-  %(prog)s /path/to/classical G
+  # Dry run — analyze without touching the server
+  %(prog)s --dry-run --report report.csv
 
-  # Dry-run rate against Jellyfin
-  %(prog)s /path/to/classical G --server-type jellyfin --dry-run
+  # Scope to a named library
+  %(prog)s --library Music --dry-run
+
+  # Skip tracks that already have a rating
+  %(prog)s --library Music --skip-existing
 """
 
-_GENRES_EXAMPLES = """\
+_FORCE_EXAMPLES = """\
 examples:
-  # List all genre tags from the default (Emby) server
-  %(prog)s
+  # Rate a known-clean library as G
+  %(prog)s G --library Music
 
-  # List genre tags from a Jellyfin server
-  %(prog)s --server-type jellyfin
+  # Dry-run force-rate using a named server
+  %(prog)s G --server home-jellyfin --dry-run
+"""
+
+_RESET_EXAMPLES = """\
+examples:
+  # Remove all ratings from the Music library
+  %(prog)s --library Music
+
+  # Dry run — show what would be cleared
+  %(prog)s --library Music --dry-run
 """
 
 _MAIN_EXAMPLES = """\
 subcommands:
-  scan    Fetch lyrics from server, detect explicit content, set ratings
-  rate    Set a fixed rating on all tracks under the given path(s)
-  genres  List all Audio genre tags from the server
+  rate    Fetch lyrics from server, detect explicit content, set ratings
+  force   Set a fixed rating on all tracks in scope (no lyrics evaluation)
+  reset   Remove OfficialRating from all tracks in scope
 
 examples:
-  %(prog)s scan /path/to/music --dry-run --report report.csv
-  %(prog)s scan --server home-emby --dry-run
-  %(prog)s rate /path/to/classical G
-  %(prog)s genres
+  %(prog)s rate --dry-run --report report.csv
+  %(prog)s rate --library Music --dry-run
+  %(prog)s force G --library "Classical Music"
+  %(prog)s reset --library Music --dry-run
 """
 
 
@@ -1547,20 +1707,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to .env file (default: .env in the repo root; e.g. --env-file .env.prod)",
     )
     shared.add_argument(
-        "--server-type",
-        default=None,
-        choices=("emby", "jellyfin", "both"),
-        help="Media server type: 'emby', 'jellyfin', or 'both' (syncs both in one pass)",
-    )
-    shared.add_argument(
         "--server-url",
         default=None,
-        help="Server URL — one-off override (use with --api-key/--server-url)",
+        help="Server URL for one-off use (requires --api-key)",
     )
     shared.add_argument(
         "--api-key",
         default=None,
-        help="API key — one-off override (use with --api-key/--server-url)",
+        help="API key for one-off use (requires --server-url)",
     )
     shared.add_argument(
         "--server",
@@ -1569,6 +1723,18 @@ def build_parser() -> argparse.ArgumentParser:
         dest="server",
         metavar="NAME",
         help="Target a named server (repeatable; e.g. --server home-emby --server home-jellyfin)",
+    )
+    shared.add_argument(
+        "--library",
+        default=None,
+        metavar="NAME",
+        help="Scope to a specific music library (default: all music libraries)",
+    )
+    shared.add_argument(
+        "--location",
+        default=None,
+        metavar="NAME",
+        help="Scope to a location within a library (e.g. 'classical')",
     )
     shared.add_argument(
         "-v",
@@ -1591,79 +1757,110 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command")
 
-    # --- scan subcommand ---
-    scan_parser = subparsers.add_parser(
-        "scan",
+    # --- rate subcommand ---
+    rate_parser = subparsers.add_parser(
+        "rate",
         parents=[shared],
         help="Fetch lyrics from server, detect explicit content, set ratings",
         description="Fetch lyrics from the media server API, detect explicit "
         "content, and set OfficialRating on matching tracks.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=_SCAN_EXAMPLES,
+        epilog=_RATE_EXAMPLES,
     )
-    scan_parser.add_argument(
+    rate_parser.add_argument(
         "library_path",
         nargs="*",
         default=None,
         help="Library root directory/directories (overrides config; multiple paths supported)",
     )
-    scan_parser.add_argument(
+    rate_parser.add_argument(
         "-n",
         "--dry-run",
         action="store_true",
         help="Analyze only — no server updates",
     )
-    scan_parser.add_argument(
+    rate_parser.add_argument(
         "--report",
         default=None,
         help="CSV report output path",
     )
-    scan_parser.add_argument(
-        "--clear",
+    rate_parser.add_argument(
+        "--overwrite",
         action="store_true",
-        help="Clear ratings from tracks with lyrics that are present and detected as clean",
+        default=None,
+        help="Re-evaluate and update tracks that already have a rating",
+    )
+    rate_parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        default=None,
+        help="Skip tracks that already have any rating",
     )
 
-    # --- rate subcommand ---
-    rate_parser = subparsers.add_parser(
-        "rate",
+    # --- force subcommand ---
+    force_parser = subparsers.add_parser(
+        "force",
         parents=[shared],
-        help="Set a fixed rating on all tracks under the given path(s)",
+        help="Set a fixed rating on all tracks in scope (no lyrics evaluation)",
         description="Skip detection and set a fixed OfficialRating on ALL "
-        "audio tracks under the given library path(s).",
+        "audio tracks in the configured scope.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=_RATE_EXAMPLES,
+        epilog=_FORCE_EXAMPLES,
     )
-    rate_parser.add_argument(
-        "library_path",
-        nargs="+",
-        help="Library root directory/directories",
-    )
-    rate_parser.add_argument(
+    force_parser.add_argument(
         "rating",
         help="Rating to set on all tracks (e.g. G, PG-13, R)",
     )
-    rate_parser.add_argument(
+    force_parser.add_argument(
+        "library_path",
+        nargs="*",
+        default=None,
+        help="Library root directory/directories (overrides config; multiple paths supported)",
+    )
+    force_parser.add_argument(
         "-n",
         "--dry-run",
         action="store_true",
         help="Analyze only — no server updates",
     )
-    rate_parser.add_argument(
+    force_parser.add_argument(
         "--report",
         default=None,
         help="CSV report output path",
     )
+    force_parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        default=None,
+        help="Overwrite existing ratings",
+    )
+    force_parser.add_argument(
+        "--skip-existing",
+        action="store_true",
+        default=None,
+        help="Skip tracks that already have any rating",
+    )
 
-    # --- genres subcommand ---
-    subparsers.add_parser(
-        "genres",
+    # --- reset subcommand ---
+    reset_parser = subparsers.add_parser(
+        "reset",
         parents=[shared],
-        help="List all Audio genre tags from the server",
-        description="Connect to the media server, print all Audio genre tags, "
-        "then exit. Useful for populating [detection.g_genres] in the config.",
+        help="Remove OfficialRating from all tracks in scope",
+        description="Remove OfficialRating from ALL audio tracks in the "
+        "configured scope. This is a destructive operation.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=_GENRES_EXAMPLES,
+        epilog=_RESET_EXAMPLES,
+    )
+    reset_parser.add_argument(
+        "-n",
+        "--dry-run",
+        action="store_true",
+        help="Analyze only — no server updates",
+    )
+    reset_parser.add_argument(
+        "--report",
+        default=None,
+        help="CSV report output path",
     )
 
     return parser
@@ -1769,10 +1966,6 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
 
-    if args.command == "genres":
-        list_genres_mode(config)
-        return
-
     all_results: list[DetectionResult] = []
     multi = len(config.servers) > 1
     had_failure = False
@@ -1788,28 +1981,20 @@ def main() -> None:
         if label:
             log.info("--- Processing %s ---", label)
 
-        if config.force_rating:
-            try:
-                results = force_rate_library(srv_config)
-            except SystemExit as exc:
-                log.error(
-                    "%s failed (exit %s).",
-                    label or "Server",
-                    exc.code,
-                )
-                results = []
-                had_failure = True
-        else:
-            try:
+        try:
+            if args.command == "rate":
                 results = process_library(srv_config)
-            except SystemExit as exc:
-                log.error(
-                    "%s failed (exit %s).",
-                    label or "Server",
-                    exc.code,
-                )
-                results = []
-                had_failure = True
+            elif args.command == "force":
+                results = force_rate_library(srv_config)
+            elif args.command == "reset":
+                results = reset_library(srv_config)
+            else:
+                log.error("Unknown command: %s", args.command)
+                sys.exit(1)
+        except SystemExit as exc:
+            log.error("%s failed (exit %s).", label or "Server", exc.code)
+            results = []
+            had_failure = True
 
         all_results.extend(results)
         if multi:
