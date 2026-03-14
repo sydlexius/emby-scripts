@@ -128,6 +128,8 @@ class Config:
     report_path: Path | None = None
     g_genres: list[str] = field(default_factory=list)
     servers: list[ServerConfig] = field(default_factory=list)
+    library_name: str | None = None
+    location_name: str | None = None
 
     def __post_init__(self) -> None:
         if self.server_type not in ("emby", "jellyfin"):
@@ -426,7 +428,12 @@ def build_config(args: argparse.Namespace) -> Config:
             elif toml_lp:
                 raw_paths = [toml_lp]
 
-    if not raw_paths and getattr(args, "command", None) != "genres":
+    has_scope = getattr(args, "library", None) or getattr(args, "location", None)
+    if (
+        not raw_paths
+        and getattr(args, "command", None) not in ("genres",)
+        and not has_scope
+    ):
         print(
             "Error: library_path is required. Provide it via command-line argument, "
             "TAGLRC_LIBRARY_PATH environment variable, or [general].library_path in the TOML config.",
@@ -481,6 +488,8 @@ def build_config(args: argparse.Namespace) -> Config:
         report_path=report_path,
         g_genres=g_genres,
         servers=servers,
+        library_name=getattr(args, "library", None),
+        location_name=getattr(args, "location", None),
     )
 
 
@@ -693,7 +702,7 @@ class MediaServerClient:
             ) from exc
 
     def prefetch_audio_items(
-        self, *, include_media_sources: bool = False
+        self, *, include_media_sources: bool = False, parent_id: str | None = None
     ) -> dict[str, dict]:
         """Paginated fetch of all Audio items. Returns {normalized_path: item}.
 
@@ -701,6 +710,9 @@ class MediaServerClient:
         parameter on Emby (includes embedded lyrics in MediaStreams.Extradata at
         the cost of a larger payload). On Jellyfin this flag has no effect —
         embedded lyrics are fetched per-track via /Audio/{id}/Lyrics by the caller.
+
+        Pass parent_id to scope the query to a specific library (ItemId from
+        /Library/VirtualFolders).
         """
         fields = "Path,OfficialRating,AlbumArtist,Album,Genres"
         if include_media_sources and self.server_type == "emby":
@@ -711,10 +723,11 @@ class MediaServerClient:
         total = 0
         uid = self._get_user_id()
         while True:
+            parent_filter = f"&ParentId={parent_id}" if parent_id else ""
             result = self._request(
                 "GET",
                 f"/Users/{uid}/Items?Recursive=true&IncludeItemTypes=Audio"
-                f"&Fields={fields}"
+                f"&Fields={fields}{parent_filter}"
                 f"&StartIndex={start_index}&Limit={page_size}",
             )
             if not result:
@@ -930,6 +943,29 @@ class MediaServerClient:
         ]
         return sorted(names, key=str.casefold)
 
+    def discover_libraries(self) -> list[dict]:
+        """GET /Library/VirtualFolders — return music libraries.
+
+        Each entry has ``Name``, ``ItemId``, ``Locations`` (list of path
+        strings), and ``CollectionType``.  Only libraries with
+        ``CollectionType == "music"`` are returned.
+        """
+        result = self._request("GET", "/Library/VirtualFolders")
+        if not result or not isinstance(result, list):
+            log.warning("discover_libraries: unexpected response: %r", type(result))
+            return []
+        music_libs = [
+            lib
+            for lib in result
+            if isinstance(lib, dict) and lib.get("CollectionType") == "music"
+        ]
+        log.info(
+            "Discovered %d music library/libraries: %s",
+            len(music_libs),
+            ", ".join(lib.get("Name", "?") for lib in music_libs),
+        )
+        return music_libs
+
 
 def _normalize_path(p: str) -> str:
     """Normalize a path for dict lookup, handling mixed separators."""
@@ -1048,6 +1084,116 @@ def _is_under_roots(norm_path: str, lib_roots: list[Path]) -> bool:
     return any(p.is_relative_to(r) for r in lib_roots)
 
 
+def _resolve_library_scope(
+    client: MediaServerClient,
+    library_name: str | None,
+    location_name: str | None,
+) -> tuple[str | None, str | None]:
+    """Resolve --library/--location to a ParentId and optional location path.
+
+    Returns ``(parent_id, location_path)``:
+    - ``parent_id``: the ``ItemId`` of the matched library (for the prefetch
+      query's ``ParentId`` parameter), or ``None`` to fetch all items.
+    - ``location_path``: the server-side path prefix for the matched location
+      (e.g. ``"/classical"``), or ``None`` if no location scoping is needed.
+      Used for post-prefetch filtering of items.
+    """
+    if not library_name and not location_name:
+        return None, None
+
+    libraries = client.discover_libraries()
+    if not libraries:
+        log.error("No music libraries found on server.")
+        sys.exit(1)
+
+    matched_location_path: str | None = None
+
+    if library_name:
+        match = [
+            lib
+            for lib in libraries
+            if lib.get("Name", "").lower() == library_name.lower()
+        ]
+        if not match:
+            names = ", ".join(lib.get("Name", "?") for lib in libraries)
+            log.error("Library '%s' not found. Available: %s", library_name, names)
+            sys.exit(1)
+        lib = match[0]
+    else:
+        # --location without --library: search all music libraries
+        lib = None
+        for candidate in libraries:
+            for loc_path in candidate.get("Locations") or []:
+                loc_leaf = loc_path.rstrip("/").rsplit("/", 1)[-1]
+                if loc_leaf.lower() == location_name.lower():
+                    lib = candidate
+                    matched_location_path = loc_path
+                    break
+            if lib:
+                break
+        if not lib:
+            all_locs = [
+                loc_path.rstrip("/").rsplit("/", 1)[-1]
+                for candidate in libraries
+                for loc_path in candidate.get("Locations") or []
+            ]
+            log.error(
+                "Location '%s' not found. Available: %s",
+                location_name,
+                ", ".join(all_locs),
+            )
+            sys.exit(1)
+
+    parent_id = lib.get("ItemId", "")
+    if not parent_id:
+        log.error("Library '%s' has no ItemId.", lib.get("Name", "?"))
+        sys.exit(1)
+
+    if location_name and library_name:
+        # Find the specific location within the matched library
+        for loc_path in lib.get("Locations") or []:
+            loc_leaf = loc_path.rstrip("/").rsplit("/", 1)[-1]
+            if loc_leaf.lower() == location_name.lower():
+                matched_location_path = loc_path
+                log.info(
+                    "Scoping to location '%s' in library '%s'",
+                    location_name,
+                    lib.get("Name"),
+                )
+                return parent_id, matched_location_path
+        locs = [
+            loc_path.rstrip("/").rsplit("/", 1)[-1]
+            for loc_path in lib.get("Locations") or []
+        ]
+        log.error(
+            "Location '%s' not found in library '%s'. Available: %s",
+            location_name,
+            lib.get("Name"),
+            ", ".join(locs),
+        )
+        sys.exit(1)
+
+    log.info("Scoping to library '%s' (ID: %s)", lib.get("Name"), parent_id)
+    return parent_id, matched_location_path
+
+
+def _filter_by_location(items: dict[str, dict], location_path: str) -> dict[str, dict]:
+    """Post-prefetch filter: keep only items whose server Path starts with the location path."""
+    prefix = location_path.rstrip("/") + "/"
+    filtered = {
+        norm_path: item
+        for norm_path, item in items.items()
+        if (item.get("Path") or "").startswith(prefix)
+    }
+    log.info(
+        "Location filter: %d / %d items under %s",
+        len(filtered),
+        len(items),
+        location_path,
+    )
+    return filtered
+
+
 def process_library(config: Config) -> list[DetectionResult]:
     """Fetch lyrics via API, classify, and set ratings.
 
@@ -1067,14 +1213,27 @@ def process_library(config: Config) -> list[DetectionResult]:
     client = MediaServerClient(
         config.server_url, config.server_api_key, config.server_type
     )
+
+    # Resolve library/location scope
+    parent_id, location_path = _resolve_library_scope(
+        client,
+        config.library_name,
+        config.location_name,
+    )
+
     try:
-        server_items = client.prefetch_audio_items(include_media_sources=True)
+        server_items = client.prefetch_audio_items(
+            include_media_sources=True, parent_id=parent_id
+        )
     except MediaServerError as exc:
         log.error("Failed to prefetch server items: %s", exc)
         sys.exit(1)
 
-    # Scope to configured library paths (if provided)
-    if config.library_paths:
+    if location_path:
+        server_items = _filter_by_location(server_items, location_path)
+
+    # Path-based scoping (only when library_paths are provided and no --library/--location)
+    if config.library_paths and parent_id is None:
         _validate_library_paths(config.library_paths)
         lib_roots = [Path(_normalize_path(str(lp))) for lp in config.library_paths]
         items_in_scope = {
@@ -1185,7 +1344,6 @@ def process_library(config: Config) -> list[DetectionResult]:
 def force_rate_library(config: Config) -> list[DetectionResult]:
     """'rate' subcommand: set a fixed rating on ALL audio tracks under the
     library path(s), skipping tracks already at the target rating."""
-    _validate_library_paths(config.library_paths)
     if not config.server_url or not config.server_api_key:
         log.error(
             "'rate' requires a server URL and API key. "
@@ -1198,26 +1356,42 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
     client = MediaServerClient(
         config.server_url, config.server_api_key, config.server_type
     )
+
+    # Resolve library/location scope
+    parent_id, location_path = _resolve_library_scope(
+        client,
+        config.library_name,
+        config.location_name,
+    )
+
     try:
-        all_items = client.prefetch_audio_items()
+        all_items = client.prefetch_audio_items(parent_id=parent_id)
     except MediaServerError as exc:
         log.error("Failed to prefetch server items: %s", exc)
         sys.exit(1)
 
-    # Filter to items under the library path(s) (path-aware, avoids /music matching /music2)
-    lib_roots = [Path(_normalize_path(str(lp))) for lp in config.library_paths]
-    items_in_scope = {
-        path: item
-        for path, item in all_items.items()
-        if _is_under_roots(path, lib_roots)
-    }
-    paths_display = ", ".join(str(lp) for lp in config.library_paths)
-    log.info(
-        "Force-rating: %d items under %s (of %d total)",
-        len(items_in_scope),
-        paths_display,
-        len(all_items),
-    )
+    if location_path:
+        all_items = _filter_by_location(all_items, location_path)
+
+    # Path-based scoping (only when library_paths are provided and no --library/--location)
+    if config.library_paths and parent_id is None:
+        _validate_library_paths(config.library_paths)
+        lib_roots = [Path(_normalize_path(str(lp))) for lp in config.library_paths]
+        items_in_scope = {
+            path: item
+            for path, item in all_items.items()
+            if _is_under_roots(path, lib_roots)
+        }
+        paths_display = ", ".join(str(lp) for lp in config.library_paths)
+        log.info(
+            "Force-rating: %d items under %s (of %d total)",
+            len(items_in_scope),
+            paths_display,
+            len(all_items),
+        )
+    else:
+        items_in_scope = all_items
+        log.info("Force-rating all %d items (no library path filter)", len(all_items))
 
     results: list[DetectionResult] = []
     for norm_path, item in items_in_scope.items():
@@ -1436,6 +1610,18 @@ def build_parser() -> argparse.ArgumentParser:
         dest="server",
         metavar="NAME",
         help="Target a named server (repeatable; e.g. --server home-emby --server home-jellyfin)",
+    )
+    shared.add_argument(
+        "--library",
+        default=None,
+        metavar="NAME",
+        help="Scope to a specific music library (default: all music libraries)",
+    )
+    shared.add_argument(
+        "--location",
+        default=None,
+        metavar="NAME",
+        help="Scope to a location within a library (e.g. 'classical')",
     )
     shared.add_argument(
         "-v",
