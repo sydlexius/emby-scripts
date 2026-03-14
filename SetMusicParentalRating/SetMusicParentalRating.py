@@ -895,11 +895,12 @@ class MediaServerClient:
                         exc,
                     )
                     continue
-                if text.strip():
-                    return strip_lrc_tags(text)
+                cleaned = strip_lrc_tags(text)
+                if cleaned.strip():
+                    return cleaned
                 log.debug(
                     "External subtitle stream for %s (stream %s) returned "
-                    "empty/whitespace text; trying next stream",
+                    "no usable text after stripping LRC tags; trying next stream",
                     item_path,
                     stream_index,
                 )
