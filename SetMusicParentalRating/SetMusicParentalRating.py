@@ -292,7 +292,7 @@ def build_config(args: argparse.Namespace) -> Config:
         sys.exit(1)
     try:
         library_paths = [Path(p).expanduser() for p in raw_paths] if raw_paths else []
-    except RuntimeError as exc:
+    except (RuntimeError, TypeError) as exc:
         print(
             f"Error: cannot expand library_path: {exc}",
             file=sys.stderr,
@@ -962,7 +962,8 @@ def _validate_library_paths(paths: list[Path]) -> None:
 
 def _is_under_roots(norm_path: str, lib_roots: list[Path]) -> bool:
     """Return True if *norm_path* falls under any of the library roots."""
-    return any(Path(norm_path).is_relative_to(r) for r in lib_roots)
+    p = Path(norm_path)
+    return any(p.is_relative_to(r) for r in lib_roots)
 
 
 def process_library(config: Config) -> list[DetectionResult]:
