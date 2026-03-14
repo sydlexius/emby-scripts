@@ -916,9 +916,12 @@ class MediaServerClient:
         """
         if self.server_type == "emby":
             text = self.fetch_lyrics_emby(item)
-        else:
+        elif self.server_type == "jellyfin":
             item_id = item.get("Id", "")
             text = self.fetch_lyrics_jellyfin(item_id) if item_id else ""
+        else:
+            log.warning("fetch_lyrics: unsupported server_type %r", self.server_type)
+            return None
         return text if text else None
 
     def update_item(self, item_id: str, item_body: dict) -> None:
