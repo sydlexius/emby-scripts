@@ -86,7 +86,7 @@ Eliminate filesystem access entirely. Fetch lyrics from the server API, classify
 
 Fetch lyrics via API, classify, set ratings. Genre fallback for tracks with no lyrics.
 
-```
+```text
 rate [options]
   --server NAME         Target a named server (repeatable; prompts if multiple configured and none specified)
   --library NAME        Scope to a specific library (default: all music libraries)
@@ -103,7 +103,7 @@ rate [options]
 
 Set a fixed rating on all tracks in scope. No lyrics evaluation. Overwrites existing ratings by default.
 
-```
+```text
 force RATING [options]
   --server NAME         Target a named server (repeatable)
   --library NAME        Scope to a specific library
@@ -117,7 +117,7 @@ force RATING [options]
 
 Remove `OfficialRating` from all tracks in scope. Destructive operation.
 
-```
+```text
 reset [options]
   --server NAME         Target a named server (repeatable)
   --library NAME        Scope to a specific library
@@ -130,7 +130,7 @@ reset [options]
 
 Interactive setup that writes TOML config and `.env` file. Subsumes the current `genres` subcommand.
 
-```
+```text
 configure [options]
 ```
 

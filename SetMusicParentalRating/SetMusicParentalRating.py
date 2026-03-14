@@ -870,7 +870,7 @@ class MediaServerClient:
                     continue
                 if not stream.get("IsExternal", False):
                     continue
-                if stream.get("Codec", "").lower() != "lrc":
+                if str(stream.get("Codec") or "").lower() != "lrc":
                     continue
                 stream_index = stream.get("Index")
                 if stream_index is None:
