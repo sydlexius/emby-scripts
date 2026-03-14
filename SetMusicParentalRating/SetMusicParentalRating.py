@@ -908,6 +908,19 @@ class MediaServerClient:
         # --- Fallback: embedded lyrics from Extradata ---
         return extract_embedded_lyrics(item)
 
+    def fetch_lyrics(self, item: dict) -> str | None:
+        """Fetch lyrics for an audio item, abstracting server-specific logic.
+
+        Returns plain text lyrics (normalized via strip_lrc_tags) or None if
+        the track has no lyrics.
+        """
+        if self.server_type == "emby":
+            text = self.fetch_lyrics_emby(item)
+        else:
+            item_id = item.get("Id", "")
+            text = self.fetch_lyrics_jellyfin(item_id) if item_id else ""
+        return text if text else None
+
     def update_item(self, item_id: str, item_body: dict) -> None:
         """POST /Items/{id} — send full item body with modified fields."""
         self._request("POST", f"/Items/{item_id}", body=item_body)
