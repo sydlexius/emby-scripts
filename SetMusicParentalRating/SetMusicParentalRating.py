@@ -1115,7 +1115,14 @@ def process_library(config: Config) -> list[DetectionResult]:
             continue
 
         # Try lyrics
-        lyrics_text = client.fetch_lyrics(item)
+        try:
+            lyrics_text = client.fetch_lyrics(item)
+        except MediaServerError as exc:
+            if exc.status_code in (401, 403):
+                log.error("Auth/permission error fetching lyrics: %s", exc)
+                break  # abort scan — credentials are bad
+            log.warning("Failed to fetch lyrics for %s: %s", norm_path, exc)
+            lyrics_text = None
 
         if lyrics_text is not None:
             tier, matched = classify_lyrics(lyrics_text, config)
