@@ -1223,12 +1223,12 @@ def process_library(config: Config) -> list[DetectionResult]:
 
 
 def force_rate_library(config: Config) -> list[DetectionResult]:
-    """--force-rating mode: set a fixed rating on ALL audio tracks under the
+    """'rate' subcommand: set a fixed rating on ALL audio tracks under the
     library path(s), skipping tracks already at the target rating."""
     _validate_library_paths(config.library_paths)
     if not config.server_url or not config.server_api_key:
         log.error(
-            "--force-rating requires a server URL and API key "
+            "'rate' requires a server URL and API key "
             "(set EMBY_URL+EMBY_API_KEY or JELLYFIN_URL+JELLYFIN_API_KEY in .env, or use --server-url/--api-key)"
         )
         sys.exit(1)
@@ -1293,17 +1293,17 @@ def force_rate_library(config: Config) -> list[DetectionResult]:
 
 
 def list_genres_mode(config: Config) -> None:
-    """--list-genres mode: print all Audio genre names from the server to stdout. Exits with non-zero status on error."""
+    """'genres' subcommand: print all Audio genre names from the server to stdout. Exits with non-zero status on error."""
     if config.server_type == "both":
         print(
-            "Error: --list-genres is not supported with --server-type both. "
+            "Error: 'genres' is not supported with --server-type both. "
             "Run separately with --server-type emby and --server-type jellyfin.",
             file=sys.stderr,
         )
         sys.exit(1)
     if not config.server_url or not config.server_api_key:
         print(
-            "Error: --list-genres requires server URL and API key "
+            "Error: 'genres' requires server URL and API key "
             "(set EMBY_URL+EMBY_API_KEY or JELLYFIN_URL+JELLYFIN_API_KEY in .env, or use --server-url/--api-key). "
             "Use --server-type to select Emby or Jellyfin when both are configured.",
             file=sys.stderr,
@@ -1443,7 +1443,7 @@ examples:
 
 _MAIN_EXAMPLES = """\
 subcommands:
-  scan    Scan sidecar/embedded lyrics and set ratings (default)
+  scan    Scan sidecar/embedded lyrics and set ratings
   rate    Set a fixed rating on all tracks under the given path(s)
   genres  List all Audio genre tags from the server
 
@@ -1508,7 +1508,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser = subparsers.add_parser(
         "scan",
         parents=[shared],
-        help="Scan sidecar/embedded lyrics and set ratings (default)",
+        help="Scan sidecar/embedded lyrics and set ratings",
         description="Scan sidecar and embedded lyrics for explicit content, "
         "then set OfficialRating on matching tracks.",
         formatter_class=argparse.RawDescriptionHelpFormatter,

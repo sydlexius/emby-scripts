@@ -70,8 +70,10 @@ The script uses three subcommands: **`scan`**, **`rate`**, and **`genres`**.
 ```text
 SetMusicParentalRating.py {scan,rate,genres} [options]
 
-Shared options (all subcommands):
+Top-level options:
   --version                 Show program version and exit
+
+Shared options (all subcommands):
   --config PATH             TOML config file (default: explicit_config.toml in script dir)
   --env-file PATH           .env file to load (default: .env in repo root; e.g. --env-file .env.prod)
   --server-type TYPE        'emby', 'jellyfin', or 'both' — auto-detected from configured
