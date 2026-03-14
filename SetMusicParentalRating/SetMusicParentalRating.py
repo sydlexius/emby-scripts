@@ -34,21 +34,6 @@ except ModuleNotFoundError:
 # Constants
 # ---------------------------------------------------------------------------
 
-AUDIO_EXTENSIONS = (
-    ".flac",
-    ".mp3",
-    ".m4a",
-    ".ogg",
-    ".opus",
-    ".wma",
-    ".wav",
-    ".aac",
-    ".alac",
-    ".wv",
-    ".ape",
-)
-SIDECAR_EXTENSIONS = frozenset({".lrc", ".txt"})
-
 DEFAULT_R_STEMS: list[str] = [
     "fuck",
     "shit",
@@ -410,44 +395,6 @@ def build_config(args: argparse.Namespace) -> Config:
 
 
 # ---------------------------------------------------------------------------
-# Filesystem Scanning
-# ---------------------------------------------------------------------------
-
-
-def find_sidecars(library_path: Path) -> list[Path]:
-    """Find all .lrc and .txt sidecar files under the library path."""
-    sidecars: list[Path] = []
-    for ext in SIDECAR_EXTENSIONS:
-        sidecars.extend(library_path.rglob(f"*{ext}"))
-    sidecars.sort()
-    return sidecars
-
-
-def match_audio_file(sidecar: Path) -> Path | None:
-    """Find the audio file in the same directory with the same stem."""
-    for ext in AUDIO_EXTENSIONS:
-        candidate = sidecar.with_suffix(ext)
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def scan_library(library_path: Path) -> list[tuple[Path, Path | None]]:
-    """Return (sidecar, audio_file_or_None) pairs."""
-    sidecars = find_sidecars(library_path)
-    log.info("Found %d sidecar files under %s", len(sidecars), library_path)
-    results: list[tuple[Path, Path | None]] = []
-    for sc in sidecars:
-        audio = match_audio_file(sc)
-        if audio is None:
-            log.warning("No matching audio file for sidecar: %s", sc)
-        else:
-            log.debug("Matched: %s -> %s", sc.name, audio.name)
-        results.append((sc, audio))
-    return results
-
-
-# ---------------------------------------------------------------------------
 # LRC Parsing
 # ---------------------------------------------------------------------------
 
@@ -460,16 +407,6 @@ def strip_lrc_tags(text: str) -> str:
     text = _LRC_TIMESTAMP_RE.sub("", text)
     text = _LRC_METADATA_RE.sub("", text)
     return text
-
-
-def parse_sidecar(path: Path) -> str:
-    """Read a sidecar file and return clean text content."""
-    try:
-        raw = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        log.warning("Could not read sidecar %s: %s", path, exc)
-        return ""
-    return strip_lrc_tags(raw)
 
 
 def extract_embedded_lyrics(item: dict) -> str:
