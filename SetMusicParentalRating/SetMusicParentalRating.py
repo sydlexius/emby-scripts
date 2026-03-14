@@ -1401,7 +1401,7 @@ def build_parser() -> argparse.ArgumentParser:
     scan_parser.add_argument(
         "--clear",
         action="store_true",
-        help="Clear ratings from tracks whose lyrics contain no explicit words",
+        help="Clear ratings from tracks with lyrics that are present and detected as clean",
     )
 
     # --- rate subcommand ---
