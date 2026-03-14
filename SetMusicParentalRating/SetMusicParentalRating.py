@@ -922,7 +922,7 @@ class MediaServerClient:
         else:
             log.warning("fetch_lyrics: unsupported server_type %r", self.server_type)
             return None
-        return text if text else None
+        return text if text and text.strip() else None
 
     def update_item(self, item_id: str, item_body: dict) -> None:
         """POST /Items/{id} — send full item body with modified fields."""
