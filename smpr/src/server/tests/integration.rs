@@ -40,3 +40,104 @@ fn detect_unreachable_returns_error() {
     let result = detect_server_type("http://localhost:19999");
     assert!(result.is_err());
 }
+
+use super::super::MediaServerClient;
+
+fn emby_client() -> Option<MediaServerClient> {
+    if !uat_enabled() {
+        return None;
+    }
+    dotenvy::from_path(std::path::Path::new("../.env")).ok();
+    let key = std::env::var("EMBY_API_KEY").ok()?;
+    Some(MediaServerClient::new(
+        "http://localhost:8096".to_string(),
+        key,
+        ServerType::Emby,
+    ))
+}
+
+fn jellyfin_client() -> Option<MediaServerClient> {
+    if !uat_enabled() {
+        return None;
+    }
+    dotenvy::from_path(std::path::Path::new("../.env")).ok();
+    let key = std::env::var("UAT_JELLYFIN_API_KEY").ok()?;
+    Some(MediaServerClient::new(
+        "http://localhost:8097".to_string(),
+        key,
+        ServerType::Jellyfin,
+    ))
+}
+
+#[test]
+fn emby_get_user_id() {
+    let Some(client) = emby_client() else { return };
+    let uid = client.get_user_id().unwrap();
+    assert!(!uid.is_empty());
+}
+
+#[test]
+fn jellyfin_get_user_id() {
+    let Some(client) = jellyfin_client() else { return };
+    let uid = client.get_user_id().unwrap();
+    assert!(!uid.is_empty());
+}
+
+#[test]
+fn emby_prefetch_audio_items() {
+    let Some(client) = emby_client() else { return };
+    let items = client.prefetch_audio_items(false, None).unwrap();
+    assert!(!items.is_empty(), "expected at least one audio item");
+    let (view, raw) = &items[0];
+    assert!(!view.id.is_empty());
+    assert!(raw.get("Id").is_some());
+}
+
+#[test]
+fn jellyfin_prefetch_audio_items() {
+    let Some(client) = jellyfin_client() else { return };
+    let items = client.prefetch_audio_items(false, None).unwrap();
+    assert!(!items.is_empty());
+}
+
+#[test]
+fn emby_discover_libraries() {
+    let Some(client) = emby_client() else { return };
+    let libs = client.discover_libraries().unwrap();
+    assert!(!libs.is_empty(), "expected at least one music library");
+    assert_eq!(libs[0].collection_type.as_deref(), Some("music"));
+}
+
+#[test]
+fn jellyfin_discover_libraries() {
+    let Some(client) = jellyfin_client() else { return };
+    let libs = client.discover_libraries().unwrap();
+    assert!(!libs.is_empty());
+}
+
+#[test]
+fn emby_list_genres() {
+    let Some(client) = emby_client() else { return };
+    let genres = client.list_genres().unwrap();
+    assert!(!genres.is_empty(), "expected at least one genre");
+    // Verify sorted (case-insensitive)
+    let sorted: Vec<String> = {
+        let mut g = genres.clone();
+        g.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        g
+    };
+    assert_eq!(genres, sorted);
+}
+
+#[test]
+fn emby_get_item_read_only() {
+    let Some(client) = emby_client() else { return };
+    let items = client.prefetch_audio_items(false, None).unwrap();
+    let (view, _) = &items[0];
+    let full_item = client.get_item(&view.id).unwrap();
+    assert!(full_item.get("Id").is_some());
+    assert!(full_item.get("Name").is_some());
+    // Verify round-trip body has more keys than the view
+    let keys = full_item.as_object().unwrap().len();
+    assert!(keys > 10, "expected full item body, got {keys} keys");
+}
