@@ -22,6 +22,24 @@ fn compile_exact_patterns(words: &[String]) -> Vec<(String, Regex)> {
         .collect()
 }
 
+#[allow(dead_code)]
+fn detect_stems(word_tokens: &[&str], stems: &[String], false_positives: &[String]) -> Vec<String> {
+    let mut matched = Vec::new();
+    for stem in stems {
+        let stem_l = stem.to_lowercase();
+        for &word in word_tokens {
+            if word.contains(stem_l.as_str()) {
+                let is_fp = false_positives.iter().any(|fp| word.contains(fp.as_str()));
+                if !is_fp {
+                    matched.push(word.to_string());
+                    break;
+                }
+            }
+        }
+    }
+    matched
+}
+
 impl DetectionEngine {
     #[allow(dead_code)]
     pub fn new(config: &DetectionConfig) -> Self {
@@ -53,6 +71,61 @@ mod tests {
             false_positives: vec!["Cocktail".into()],
             g_genres: vec!["Classical".into(), "Ambient".into()],
         }
+    }
+
+    #[test]
+    fn stems_basic_match() {
+        let tokens: Vec<&str> = vec!["motherfucker", "is", "a", "word"];
+        let stems = vec!["fuck".into()];
+        let fp: Vec<String> = vec![];
+        let result = detect_stems(&tokens, &stems, &fp);
+        assert_eq!(result, vec!["motherfucker"]);
+    }
+
+    #[test]
+    fn stems_false_positive_filtered() {
+        let tokens: Vec<&str> = vec!["cocktail", "party"];
+        let stems = vec!["cock".into()];
+        let fp = vec!["cocktail".into()];
+        let result = detect_stems(&tokens, &stems, &fp);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn stems_no_matches() {
+        let tokens: Vec<&str> = vec!["hello", "world"];
+        let stems = vec!["fuck".into()];
+        let fp: Vec<String> = vec![];
+        let result = detect_stems(&tokens, &stems, &fp);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn stems_one_match_per_stem() {
+        let tokens: Vec<&str> = vec!["fuck", "fucker", "fucking"];
+        let stems = vec!["fuck".into()];
+        let fp: Vec<String> = vec![];
+        let result = detect_stems(&tokens, &stems, &fp);
+        assert_eq!(result, vec!["fuck"]); // first match only
+    }
+
+    #[test]
+    fn stems_multiple_stems() {
+        let tokens: Vec<&str> = vec!["bullshit", "fucker"];
+        let stems = vec!["shit".into(), "fuck".into()];
+        let fp: Vec<String> = vec![];
+        let result = detect_stems(&tokens, &stems, &fp);
+        assert_eq!(result, vec!["bullshit", "fucker"]);
+    }
+
+    #[test]
+    fn stems_case_handling() {
+        // stems are lowercased internally; tokens are already lowercase from tokenizer
+        let tokens: Vec<&str> = vec!["shitty"];
+        let stems = vec!["SHIT".into()]; // uppercase stem from config
+        let fp: Vec<String> = vec![];
+        let result = detect_stems(&tokens, &stems, &fp);
+        assert_eq!(result, vec!["shitty"]);
     }
 
     #[test]
