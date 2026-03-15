@@ -316,3 +316,90 @@ fn extract_items_skips_unparseable() {
     assert_eq!(pairs[0].0.id, "1");
     assert_eq!(pairs[1].0.id, "3");
 }
+
+use super::super::types::LyricsResponse;
+
+#[test]
+fn parse_jellyfin_lyrics_response() {
+    let json = r#"{
+        "Lyrics": [
+            {"Text": "Hello world", "Start": 0},
+            {"Text": "Second line", "Start": 5000000}
+        ]
+    }"#;
+    let resp: LyricsResponse = serde_json::from_str(json).unwrap();
+    assert_eq!(resp.lyrics.len(), 2);
+    assert_eq!(resp.lyrics[0].text.as_deref(), Some("Hello world"));
+}
+
+#[test]
+fn parse_jellyfin_lyrics_empty() {
+    let json = r#"{"Lyrics": []}"#;
+    let resp: LyricsResponse = serde_json::from_str(json).unwrap();
+    assert!(resp.lyrics.is_empty());
+}
+
+use super::super::find_emby_lyrics_stream;
+
+#[test]
+fn emby_find_external_lrc_stream() {
+    let raw = serde_json::json!({
+        "Id": "8177",
+        "MediaSources": [{
+            "Id": "mediasource_8177",
+            "MediaStreams": [
+                {"Codec": "mp3", "Type": "Audio", "Index": 0, "IsExternal": false},
+                {"Codec": "lrc", "Type": "Subtitle", "Index": 1, "IsExternal": true,
+                 "Path": "/music/test.lrc"}
+            ]
+        }]
+    });
+    let result = find_emby_lyrics_stream(&raw);
+    assert!(result.is_some());
+    let (media_source_id, stream_index) = result.unwrap();
+    assert_eq!(media_source_id, "mediasource_8177");
+    assert_eq!(stream_index, 1);
+}
+
+#[test]
+fn emby_no_subtitle_streams() {
+    let raw = serde_json::json!({
+        "Id": "1234",
+        "MediaSources": [{
+            "Id": "ms_1234",
+            "MediaStreams": [
+                {"Codec": "mp3", "Type": "Audio", "Index": 0, "IsExternal": false}
+            ]
+        }]
+    });
+    assert!(find_emby_lyrics_stream(&raw).is_none());
+}
+
+#[test]
+fn emby_internal_subtitle_not_matched() {
+    let raw = serde_json::json!({
+        "Id": "1234",
+        "MediaSources": [{
+            "Id": "ms_1234",
+            "MediaStreams": [
+                {"Codec": "lrc", "Type": "Subtitle", "Index": 1, "IsExternal": false,
+                 "Extradata": "embedded lyrics text"}
+            ]
+        }]
+    });
+    assert!(find_emby_lyrics_stream(&raw).is_none());
+}
+
+#[test]
+fn emby_non_lrc_external_subtitle_skipped() {
+    let raw = serde_json::json!({
+        "Id": "1234",
+        "MediaSources": [{
+            "Id": "ms_1234",
+            "MediaStreams": [
+                {"Codec": "srt", "Type": "Subtitle", "Index": 1, "IsExternal": true}
+            ]
+        }]
+    });
+    assert!(find_emby_lyrics_stream(&raw).is_none());
+}

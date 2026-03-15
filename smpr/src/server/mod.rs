@@ -11,6 +11,7 @@ pub use error::MediaServerError;
 pub use types::SystemInfoPublic;
 
 use crate::config::ServerType;
+use crate::util::strip_lrc_tags;
 use serde::Deserialize;
 use serde_json::Value;
 use std::cell::OnceCell;
@@ -308,6 +309,94 @@ impl MediaServerClient {
         names.sort_by_cached_key(|name| name.to_lowercase());
         Ok(names)
     }
+
+    /// Fetch lyrics for an audio item, abstracting server-specific logic.
+    /// Returns Ok(Some(text)) with plain lyrics or Ok(None) if no lyrics found.
+    pub fn fetch_lyrics(
+        &self,
+        item: &types::AudioItemView,
+        raw: &Value,
+    ) -> Result<Option<String>, MediaServerError> {
+        match self.server_type {
+            ServerType::Emby => self.fetch_lyrics_emby(item, raw),
+            ServerType::Jellyfin => self.fetch_lyrics_jellyfin(&item.id),
+        }
+    }
+
+    fn fetch_lyrics_emby(
+        &self,
+        item: &types::AudioItemView,
+        raw: &Value,
+    ) -> Result<Option<String>, MediaServerError> {
+        // Try external subtitle stream first
+        if let Some((media_source_id, stream_index)) = find_emby_lyrics_stream(raw) {
+            let path = format!(
+                "/Videos/{}/{}/Subtitles/{}/Stream.txt",
+                item.id, media_source_id, stream_index
+            );
+            match self.request_text("GET", &path) {
+                Ok(text) => {
+                    let cleaned = strip_lrc_tags(&text);
+                    if !cleaned.trim().is_empty() {
+                        return Ok(Some(cleaned));
+                    }
+                }
+                Err(MediaServerError::Http { status, .. }) if status == 401 || status == 403 => {
+                    return Err(MediaServerError::Http {
+                        status,
+                        body: format!("auth error fetching lyrics for {}", item.id),
+                    });
+                }
+                Err(e) => {
+                    log::warn!("Emby subtitle fetch failed for {} (stream {}): {e}",
+                        item.path.as_deref().unwrap_or("<unknown>"), stream_index);
+                }
+            }
+        }
+
+        // Fallback: embedded lyrics from Extradata
+        Ok(extract_embedded_lyrics(raw))
+    }
+
+    fn fetch_lyrics_jellyfin(
+        &self,
+        item_id: &str,
+    ) -> Result<Option<String>, MediaServerError> {
+        let path = format!("/Audio/{item_id}/Lyrics");
+        match self.request("GET", &path, None) {
+            Ok(Some(val)) => {
+                let resp: types::LyricsResponse = serde_json::from_value(val)
+                    .map_err(|e| MediaServerError::Parse(format!("lyrics response: {e}")))?;
+                let lines: Vec<&str> = resp
+                    .lyrics
+                    .iter()
+                    .filter_map(|l| l.text.as_deref())
+                    .filter(|t| !t.is_empty())
+                    .collect();
+                if lines.is_empty() {
+                    return Ok(None);
+                }
+                let text = strip_lrc_tags(&lines.join("\n"));
+                if text.trim().is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(text))
+                }
+            }
+            Ok(None) => Ok(None),
+            Err(MediaServerError::Http { status, .. }) if status == 401 || status == 403 => {
+                Err(MediaServerError::Http {
+                    status,
+                    body: format!("auth error fetching lyrics for {item_id}"),
+                })
+            }
+            Err(MediaServerError::Http { status: 404, .. }) => Ok(None),
+            Err(e) => {
+                log::warn!("Jellyfin lyrics fetch failed for {item_id}: {e}");
+                Ok(None)
+            }
+        }
+    }
 }
 
 /// Extract (AudioItemView, Value) pairs from raw JSON item values.
@@ -408,4 +497,62 @@ pub fn detect_server_type(url: &str) -> Result<ServerType, MediaServerError> {
              Set type = \"emby\" or type = \"jellyfin\" in your TOML config."
         ))
     })
+}
+
+/// Find the first external LRC subtitle stream in an Emby item's MediaSources.
+/// Returns (media_source_id, stream_index) if found.
+pub fn find_emby_lyrics_stream(raw: &Value) -> Option<(String, i64)> {
+    let sources = raw.get("MediaSources")?.as_array()?;
+    for source in sources {
+        let Some(media_source_id) = source.get("Id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(streams) = source.get("MediaStreams").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for stream in streams {
+            if stream.get("Type").and_then(|v| v.as_str()) != Some("Subtitle") {
+                continue;
+            }
+            if !stream.get("IsExternal").and_then(|v| v.as_bool()).unwrap_or(false) {
+                continue;
+            }
+            let codec = stream.get("Codec").and_then(|v| v.as_str()).unwrap_or("");
+            if !codec.eq_ignore_ascii_case("lrc") {
+                continue;
+            }
+            let index = stream.get("Index")?.as_i64()?;
+            return Some((media_source_id.to_string(), index));
+        }
+    }
+    None
+}
+
+/// Extract embedded lyrics from Extradata on internal subtitle streams.
+fn extract_embedded_lyrics(raw: &Value) -> Option<String> {
+    let sources = raw.get("MediaSources")?.as_array()?;
+    let mut fragments = Vec::new();
+    for source in sources {
+        let Some(streams) = source.get("MediaStreams").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for stream in streams {
+            if stream.get("IsExternal").and_then(|v| v.as_bool()).unwrap_or(true) {
+                continue;
+            }
+            if stream.get("Type").and_then(|v| v.as_str()) != Some("Subtitle") {
+                continue;
+            }
+            if let Some(extradata) = stream.get("Extradata").and_then(|v| v.as_str()) {
+                let trimmed = extradata.trim();
+                if !trimmed.is_empty() {
+                    fragments.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+    if fragments.is_empty() {
+        return None;
+    }
+    Some(strip_lrc_tags(&fragments.join("\n")))
 }
