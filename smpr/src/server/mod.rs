@@ -11,6 +11,7 @@ pub use error::MediaServerError;
 pub use types::SystemInfoPublic;
 
 use crate::config::ServerType;
+use serde::Deserialize;
 use serde_json::Value;
 use std::cell::OnceCell;
 use std::time::Duration;
@@ -163,6 +164,166 @@ impl MediaServerClient {
             .read_to_string()
             .map_err(|e| MediaServerError::Connection(format!("read error: {e}")))
     }
+
+    /// Fetch and cache the first user's ID (needed for user-scoped endpoints).
+    pub fn get_user_id(&self) -> Result<&str, MediaServerError> {
+        if let Some(id) = self.user_id.get() {
+            return Ok(id);
+        }
+        let users_val = self
+            .request("GET", "/Users", None)?
+            .ok_or_else(|| MediaServerError::Protocol("no response from /Users".to_string()))?;
+        let users: Vec<types::UserInfo> = serde_json::from_value(users_val)
+            .map_err(|e| MediaServerError::Parse(format!("/Users response: {e}")))?;
+        let first = users.first().ok_or_else(|| {
+            MediaServerError::Protocol("no users returned from /Users".to_string())
+        })?;
+        if first.id.is_empty() {
+            return Err(MediaServerError::Protocol(
+                "first user has no Id field".to_string(),
+            ));
+        }
+        let _ = self.user_id.set(first.id.clone());
+        Ok(self.user_id.get().unwrap())
+    }
+
+    /// GET /Users/{userId}/Items/{id} — full item body for round-trip update.
+    pub fn get_item(&self, item_id: &str) -> Result<Value, MediaServerError> {
+        let uid = self.get_user_id()?;
+        let path = format!("/Users/{uid}/Items/{item_id}");
+        self.request("GET", &path, None)?
+            .ok_or_else(|| MediaServerError::Protocol(format!("empty response for GET {path}")))
+    }
+
+    /// POST /Items/{id} — send full item body with modified fields.
+    pub fn update_item(&self, item_id: &str, body: &Value) -> Result<(), MediaServerError> {
+        let path = format!("/Items/{item_id}");
+        self.request("POST", &path, Some(body))?;
+        Ok(())
+    }
+
+    /// Paginated fetch of all audio items. Returns (AudioItemView, raw Value) pairs.
+    pub fn prefetch_audio_items(
+        &self,
+        include_media_sources: bool,
+        parent_id: Option<&str>,
+    ) -> Result<Vec<(types::AudioItemView, Value)>, MediaServerError> {
+        let mut fields = "Path,OfficialRating,AlbumArtist,Album,Genres".to_string();
+        if include_media_sources && self.server_type == ServerType::Emby {
+            fields.push_str(",MediaSources");
+        }
+        let uid = self.get_user_id()?;
+        let parent_filter = parent_id
+            .map(|id| format!("&ParentId={id}"))
+            .unwrap_or_default();
+
+        let mut all_items = Vec::new();
+        let mut start_index: i64 = 0;
+        let page_size = 500;
+
+        loop {
+            let path = format!(
+                "/Users/{uid}/Items?Recursive=true&IncludeItemTypes=Audio\
+                 &Fields={fields}{parent_filter}\
+                 &StartIndex={start_index}&Limit={page_size}"
+            );
+            let result = self.request("GET", &path, None)?;
+            let Some(val) = result else {
+                if !all_items.is_empty() {
+                    log::warn!(
+                        "server returned empty body mid-pagination after {} items; \
+                         prefetch may be incomplete",
+                        all_items.len()
+                    );
+                }
+                break;
+            };
+            let page: types::PrefetchResponse = serde_json::from_value(val)
+                .map_err(|e| MediaServerError::Parse(format!("prefetch response: {e}")))?;
+            if page.items.is_empty() {
+                break;
+            }
+            let batch_len = page.items.len() as i64;
+            let pairs = extract_audio_items(page.items);
+            all_items.extend(pairs);
+            start_index += batch_len;
+            log::debug!(
+                "fetched {} / {} audio items",
+                start_index,
+                page.total_record_count
+            );
+            if start_index >= page.total_record_count {
+                break;
+            }
+        }
+
+        log::info!("prefetched {} audio items from server", all_items.len());
+        Ok(all_items)
+    }
+
+    /// GET /Library/VirtualFolders — return music libraries only.
+    pub fn discover_libraries(&self) -> Result<Vec<types::VirtualFolder>, MediaServerError> {
+        let result = self
+            .request("GET", "/Library/VirtualFolders", None)?
+            .ok_or_else(|| {
+                MediaServerError::Protocol(
+                    "empty response from /Library/VirtualFolders".to_string(),
+                )
+            })?;
+        let folders: Vec<types::VirtualFolder> = serde_json::from_value(result)
+            .map_err(|e| MediaServerError::Parse(format!("VirtualFolders: {e}")))?;
+        let music: Vec<types::VirtualFolder> = folders
+            .into_iter()
+            .filter(|f| f.collection_type.as_deref() == Some("music"))
+            .collect();
+        log::info!(
+            "discovered {} music library/libraries: {}",
+            music.len(),
+            music
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        Ok(music)
+    }
+
+    /// GET /MusicGenres?Recursive=true — return sorted genre names.
+    pub fn list_genres(&self) -> Result<Vec<String>, MediaServerError> {
+        let result = self
+            .request("GET", "/MusicGenres?Recursive=true", None)?
+            .ok_or_else(|| {
+                MediaServerError::Protocol(
+                    "empty response from /MusicGenres?Recursive=true".to_string(),
+                )
+            })?;
+        let resp: types::GenreResponse = serde_json::from_value(result)
+            .map_err(|e| MediaServerError::Parse(format!("MusicGenres: {e}")))?;
+        let mut names: Vec<String> = resp
+            .items
+            .into_iter()
+            .filter(|g| !g.name.is_empty())
+            .map(|g| g.name)
+            .collect();
+        names.sort_by_cached_key(|name| name.to_lowercase());
+        Ok(names)
+    }
+}
+
+/// Extract (AudioItemView, Value) pairs from raw JSON item values.
+/// Consumes the input Vec to avoid cloning each Value.
+/// Logs a warning for items that fail to deserialize.
+pub fn extract_audio_items(items: Vec<Value>) -> Vec<(types::AudioItemView, Value)> {
+    items
+        .into_iter()
+        .filter_map(|v| match types::AudioItemView::deserialize(&v) {
+            Ok(view) => Some((view, v)),
+            Err(e) => {
+                log::warn!("skipping unparseable audio item: {e}");
+                None
+            }
+        })
+        .collect()
 }
 
 /// Determine server type from a parsed SystemInfoPublic and the Server response header.
