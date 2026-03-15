@@ -27,6 +27,43 @@ fn error_display_protocol() {
     assert_eq!(err.to_string(), "protocol error: no users");
 }
 
+use super::super::MediaServerClient;
+use crate::config::ServerType;
+
+#[test]
+fn auth_header_emby() {
+    let client = MediaServerClient::new(
+        "http://localhost:8096".to_string(),
+        "test-key".to_string(),
+        ServerType::Emby,
+    );
+    let (name, value) = client.auth_header();
+    assert_eq!(name, "X-Emby-Token");
+    assert_eq!(value, "test-key");
+}
+
+#[test]
+fn auth_header_jellyfin() {
+    let client = MediaServerClient::new(
+        "http://localhost:8097".to_string(),
+        "test-key".to_string(),
+        ServerType::Jellyfin,
+    );
+    let (name, value) = client.auth_header();
+    assert_eq!(name, "X-MediaBrowser-Token");
+    assert_eq!(value, "test-key");
+}
+
+#[test]
+fn base_url_trailing_slash_stripped() {
+    let client = MediaServerClient::new(
+        "http://localhost:8096/".to_string(),
+        "key".to_string(),
+        ServerType::Emby,
+    );
+    assert_eq!(client.base_url(), "http://localhost:8096");
+}
+
 use super::super::types::SystemInfoPublic;
 
 #[test]
