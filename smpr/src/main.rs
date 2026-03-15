@@ -4,6 +4,7 @@ mod rating;
 mod report;
 mod server;
 mod tui;
+mod util;
 
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;

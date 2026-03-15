@@ -73,3 +73,19 @@ pub struct PrefetchResponse {
     #[serde(default)]
     pub total_record_count: i64,
 }
+
+/// Response from GET /Audio/{id}/Lyrics (Jellyfin only).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct LyricsResponse {
+    #[serde(default)]
+    pub lyrics: Vec<LyricLine>,
+}
+
+/// Single lyric line in a Jellyfin lyrics response.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct LyricLine {
+    pub text: Option<String>,
+    pub start: Option<i64>,
+}

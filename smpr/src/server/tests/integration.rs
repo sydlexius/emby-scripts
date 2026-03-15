@@ -147,3 +147,36 @@ fn emby_get_item_read_only() {
     let keys = full_item.as_object().unwrap().len();
     assert!(keys > 10, "expected full item body, got {keys} keys");
 }
+
+#[test]
+fn emby_fetch_lyrics_known_lrc() {
+    let Some(client) = emby_client() else { return };
+    // Item 8177 has a known LRC sidecar
+    let items = client.prefetch_audio_items(true, None).unwrap();
+    let target = items.iter().find(|(v, _)| v.id == "8177");
+    if let Some((view, raw)) = target {
+        let lyrics = client.fetch_lyrics(view, raw).unwrap();
+        assert!(lyrics.is_some(), "expected lyrics for item 8177");
+        let text = lyrics.unwrap();
+        assert!(!text.trim().is_empty(), "expected non-empty lyrics text");
+    } else {
+        eprintln!("item 8177 not found in prefetch; skipping lyrics test");
+    }
+}
+
+#[test]
+fn jellyfin_fetch_lyrics_graceful_none() {
+    let Some(client) = jellyfin_client() else {
+        return;
+    };
+    let items = client.prefetch_audio_items(false, None).unwrap();
+    if let Some((view, raw)) = items.first() {
+        // Most items won't have lyrics — verify graceful None
+        let result = client.fetch_lyrics(view, raw);
+        assert!(
+            result.is_ok(),
+            "lyrics fetch should not error: {:?}",
+            result.err()
+        );
+    }
+}
