@@ -1,4 +1,3 @@
-#[expect(dead_code, reason = "wired in Task 6")]
 mod config;
 mod detection;
 mod rating;
@@ -7,6 +6,7 @@ mod server;
 mod tui;
 
 use clap::{Args, Parser, Subcommand};
+use std::path::PathBuf;
 use std::process;
 
 /// Options shared across rate, force, and reset subcommands.
@@ -67,7 +67,6 @@ struct OverwriteOpts {
 
 impl OverwriteOpts {
     /// Resolve to Option<bool>: Some(true)=overwrite, Some(false)=skip, None=use config default.
-    #[expect(dead_code, reason = "used once config loading is implemented (#67)")]
     fn resolve(&self) -> Option<bool> {
         if self.overwrite {
             Some(true)
@@ -139,19 +138,76 @@ enum Commands {
     },
 }
 
+/// Build a CliInput from CommonOpts + optional overwrite/ignore_forced flags.
+fn build_cli_input(
+    common: &CommonOpts,
+    overwrite: Option<bool>,
+    ignore_forced: bool,
+) -> config::CliInput {
+    config::CliInput {
+        config_path: common.config.as_ref().map(PathBuf::from),
+        env_file: common.env_file.as_ref().map(PathBuf::from),
+        server_url: common.server_url.clone(),
+        api_key: common.api_key.clone(),
+        server_filter: common.server.clone(),
+        overwrite,
+        dry_run: common.dry_run,
+        report: common.report.clone(),
+        library: common.library.clone(),
+        location: common.location.clone(),
+        verbose: common.verbose,
+        ignore_forced,
+    }
+}
+
+fn load_config(
+    common: &CommonOpts,
+    overwrite: Option<bool>,
+    ignore_forced: bool,
+) -> config::Config {
+    let cli_input = build_cli_input(common, overwrite, ignore_forced);
+    config::Config::load_from_paths(&cli_input).unwrap_or_else(|e| {
+        eprintln!("Error: {e}");
+        process::exit(1);
+    })
+}
+
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Rate { .. } => {
+        Commands::Rate {
+            common,
+            overwrite,
+            ignore_forced,
+        } => {
+            let cfg = load_config(&common, overwrite.resolve(), ignore_forced);
+            if cfg.verbose {
+                eprintln!("Config loaded: {} server(s)", cfg.servers.len());
+            }
             eprintln!("rate: not yet implemented");
             process::exit(1);
         }
-        Commands::Force { .. } => {
+        Commands::Force {
+            rating,
+            common,
+            overwrite,
+        } => {
+            let cfg = load_config(&common, overwrite.resolve(), false);
+            if cfg.verbose {
+                eprintln!(
+                    "Config loaded: {} server(s), force rating={rating}",
+                    cfg.servers.len()
+                );
+            }
             eprintln!("force: not yet implemented");
             process::exit(1);
         }
-        Commands::Reset { .. } => {
+        Commands::Reset { common } => {
+            let cfg = load_config(&common, None, false);
+            if cfg.verbose {
+                eprintln!("Config loaded: {} server(s)", cfg.servers.len());
+            }
             eprintln!("reset: not yet implemented");
             process::exit(1);
         }

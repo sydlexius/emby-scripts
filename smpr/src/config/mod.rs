@@ -1,3 +1,7 @@
+// Resolved config types are foundational — fields will be consumed by
+// server, detection, rating, and report modules as they're implemented.
+#![allow(dead_code)]
+
 mod defaults;
 #[cfg(test)]
 mod tests;
