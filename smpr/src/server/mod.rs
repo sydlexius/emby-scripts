@@ -11,6 +11,7 @@ pub use error::MediaServerError;
 pub use types::SystemInfoPublic;
 
 use crate::config::ServerType;
+use serde::Deserialize;
 use serde_json::Value;
 use std::cell::OnceCell;
 use std::time::Duration;
@@ -296,19 +297,24 @@ impl MediaServerClient {
             .filter(|g| !g.name.is_empty())
             .map(|g| g.name)
             .collect();
-        names.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+        names.sort_by_cached_key(|name| name.to_lowercase());
         Ok(names)
     }
 }
 
 /// Extract (AudioItemView, Value) pairs from raw JSON item values.
-/// Skips items that fail to deserialize into AudioItemView.
+/// Logs a warning for items that fail to deserialize.
 pub fn extract_audio_items(items: &[Value]) -> Vec<(types::AudioItemView, Value)> {
     items
         .iter()
         .filter_map(|v| {
-            let view: types::AudioItemView = serde_json::from_value(v.clone()).ok()?;
-            Some((view, v.clone()))
+            match types::AudioItemView::deserialize(v) {
+                Ok(view) => Some((view, v.clone())),
+                Err(e) => {
+                    log::warn!("skipping unparseable audio item: {e}");
+                    None
+                }
+            }
         })
         .collect()
 }
