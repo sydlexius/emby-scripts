@@ -1,0 +1,55 @@
+use regex::Regex;
+use std::sync::LazyLock;
+
+static LRC_TIMESTAMP: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[\d{1,3}:\d{2}(?:\.\d{1,3})?\]").unwrap());
+
+static LRC_METADATA: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?mi)^\[[a-z]{2,}:.*\]$").unwrap());
+
+/// Remove LRC timestamp tags and metadata lines from lyrics text.
+pub fn strip_lrc_tags(text: &str) -> String {
+    let text = LRC_TIMESTAMP.replace_all(text, "");
+    let text = LRC_METADATA.replace_all(&text, "");
+    text.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_timestamps() {
+        let input = "[00:15.30]Hello world\n[00:20.00]Second line";
+        let result = strip_lrc_tags(input);
+        assert_eq!(result, "Hello world\nSecond line");
+    }
+
+    #[test]
+    fn strip_metadata_lines() {
+        let input = "[ar:Artist Name]\n[ti:Song Title]\nActual lyrics here";
+        let result = strip_lrc_tags(input);
+        assert!(result.contains("Actual lyrics here"));
+        assert!(!result.contains("[ar:"));
+        assert!(!result.contains("[ti:"));
+    }
+
+    #[test]
+    fn passthrough_plain_text() {
+        let input = "Just plain text lyrics\nNo tags at all";
+        let result = strip_lrc_tags(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn empty_input() {
+        assert_eq!(strip_lrc_tags(""), "");
+    }
+
+    #[test]
+    fn mixed_timestamps_and_text() {
+        let input = "[01:23.45]Line one\nPlain line\n[02:00.00]Line three";
+        let result = strip_lrc_tags(input);
+        assert_eq!(result, "Line one\nPlain line\nLine three");
+    }
+}
