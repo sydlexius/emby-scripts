@@ -248,7 +248,10 @@ fn parse_audio_item_view_emby() {
     }"#;
     let item: AudioItemView = serde_json::from_str(json).unwrap();
     assert_eq!(item.id, "9383");
-    assert_eq!(item.path.as_deref(), Some("/music/Watashi Wa/Eager Seas/01. Track.mp3"));
+    assert_eq!(
+        item.path.as_deref(),
+        Some("/music/Watashi Wa/Eager Seas/01. Track.mp3")
+    );
     assert!(item.official_rating.is_none());
     assert_eq!(item.genres.len(), 2);
 }
@@ -288,10 +291,13 @@ use super::super::extract_audio_items;
 
 #[test]
 fn extract_items_from_value_array() {
-    let items: Vec<serde_json::Value> = serde_json::from_str(r#"[
+    let items: Vec<serde_json::Value> = serde_json::from_str(
+        r#"[
         {"Id": "1", "Path": "/music/a.mp3", "Genres": []},
         {"Id": "2", "Path": "/music/b.mp3", "Genres": ["Rock"]}
-    ]"#).unwrap();
+    ]"#,
+    )
+    .unwrap();
     let pairs = extract_audio_items(items);
     assert_eq!(pairs.len(), 2);
     assert_eq!(pairs[0].0.id, "1");

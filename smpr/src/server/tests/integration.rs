@@ -78,7 +78,9 @@ fn emby_get_user_id() {
 
 #[test]
 fn jellyfin_get_user_id() {
-    let Some(client) = jellyfin_client() else { return };
+    let Some(client) = jellyfin_client() else {
+        return;
+    };
     let uid = client.get_user_id().unwrap();
     assert!(!uid.is_empty());
 }
@@ -95,7 +97,9 @@ fn emby_prefetch_audio_items() {
 
 #[test]
 fn jellyfin_prefetch_audio_items() {
-    let Some(client) = jellyfin_client() else { return };
+    let Some(client) = jellyfin_client() else {
+        return;
+    };
     let items = client.prefetch_audio_items(false, None).unwrap();
     assert!(!items.is_empty());
 }
@@ -110,7 +114,9 @@ fn emby_discover_libraries() {
 
 #[test]
 fn jellyfin_discover_libraries() {
-    let Some(client) = jellyfin_client() else { return };
+    let Some(client) = jellyfin_client() else {
+        return;
+    };
     let libs = client.discover_libraries().unwrap();
     assert!(!libs.is_empty());
 }

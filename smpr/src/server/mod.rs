@@ -175,9 +175,9 @@ impl MediaServerClient {
             .ok_or_else(|| MediaServerError::Protocol("no response from /Users".to_string()))?;
         let users: Vec<types::UserInfo> = serde_json::from_value(users_val)
             .map_err(|e| MediaServerError::Parse(format!("/Users response: {e}")))?;
-        let first = users
-            .first()
-            .ok_or_else(|| MediaServerError::Protocol("no users returned from /Users".to_string()))?;
+        let first = users.first().ok_or_else(|| {
+            MediaServerError::Protocol("no users returned from /Users".to_string())
+        })?;
         if first.id.is_empty() {
             return Err(MediaServerError::Protocol(
                 "first user has no Id field".to_string(),
@@ -192,9 +192,7 @@ impl MediaServerClient {
         let uid = self.get_user_id()?;
         let path = format!("/Users/{uid}/Items/{item_id}");
         self.request("GET", &path, None)?
-            .ok_or_else(|| {
-                MediaServerError::Protocol(format!("empty response for GET {path}"))
-            })
+            .ok_or_else(|| MediaServerError::Protocol(format!("empty response for GET {path}")))
     }
 
     /// POST /Items/{id} — send full item body with modified fields.
@@ -249,7 +247,11 @@ impl MediaServerClient {
             let pairs = extract_audio_items(page.items);
             all_items.extend(pairs);
             start_index += batch_len;
-            log::debug!("fetched {} / {} audio items", start_index, page.total_record_count);
+            log::debug!(
+                "fetched {} / {} audio items",
+                start_index,
+                page.total_record_count
+            );
             if start_index >= page.total_record_count {
                 break;
             }
@@ -277,7 +279,11 @@ impl MediaServerClient {
         log::info!(
             "discovered {} music library/libraries: {}",
             music.len(),
-            music.iter().map(|l| l.name.as_str()).collect::<Vec<_>>().join(", ")
+            music
+                .iter()
+                .map(|l| l.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         Ok(music)
     }
@@ -287,7 +293,9 @@ impl MediaServerClient {
         let result = self
             .request("GET", "/MusicGenres?Recursive=true", None)?
             .ok_or_else(|| {
-                MediaServerError::Protocol("empty response from /MusicGenres?Recursive=true".to_string())
+                MediaServerError::Protocol(
+                    "empty response from /MusicGenres?Recursive=true".to_string(),
+                )
             })?;
         let resp: types::GenreResponse = serde_json::from_value(result)
             .map_err(|e| MediaServerError::Parse(format!("MusicGenres: {e}")))?;
@@ -308,13 +316,11 @@ impl MediaServerClient {
 pub fn extract_audio_items(items: Vec<Value>) -> Vec<(types::AudioItemView, Value)> {
     items
         .into_iter()
-        .filter_map(|v| {
-            match types::AudioItemView::deserialize(&v) {
-                Ok(view) => Some((view, v)),
-                Err(e) => {
-                    log::warn!("skipping unparseable audio item: {e}");
-                    None
-                }
+        .filter_map(|v| match types::AudioItemView::deserialize(&v) {
+            Ok(view) => Some((view, v)),
+            Err(e) => {
+                log::warn!("skipping unparseable audio item: {e}");
+                None
             }
         })
         .collect()
