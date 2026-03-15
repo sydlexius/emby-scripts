@@ -23,9 +23,8 @@ When reporting, please include:
 
 This project interacts with Emby and Jellyfin media server APIs using API keys. Security concerns include:
 
-- API key exposure (keys should only be in `.env` files, never committed)
+- API key exposure (keys should only be in `.env` files or environment variables, never committed to source control)
 - Server-side request forgery (SSRF) via user-supplied server URLs
-- Command injection via config values
 
 ## Security Measures
 
