@@ -1,4 +1,6 @@
 use super::*;
+use std::io::Write as IoWrite;
+use tempfile::NamedTempFile;
 
 #[test]
 fn parse_full_toml() {
@@ -175,5 +177,85 @@ key = "value"
     assert_eq!(
         servers["test"].url.as_deref(),
         Some("http://localhost:8096")
+    );
+}
+
+// ── Config::load_from_paths tests ──────────────────────────────────
+
+#[test]
+fn load_config_from_toml_and_env() {
+    let toml_content = r#"
+[servers.home-emby]
+url = "http://192.168.1.126:8096"
+type = "emby"
+
+[servers.home-emby.libraries.Music]
+force_rating = "PG-13"
+
+[detection.r]
+stems = ["custom_r"]
+
+[general]
+overwrite = false
+
+[report]
+output_path = "/tmp/default_report.csv"
+"#;
+
+    let mut toml_file = NamedTempFile::new().unwrap();
+    toml_file.write_all(toml_content.as_bytes()).unwrap();
+
+    let mut env_file = NamedTempFile::new().unwrap();
+    writeln!(env_file, "HOME_EMBY_API_KEY=test-key-123").unwrap();
+
+    let cli = CliInput {
+        config_path: Some(toml_file.path().to_path_buf()),
+        env_file: Some(env_file.path().to_path_buf()),
+        dry_run: true,
+        verbose: true,
+        library: Some("Music".to_string()),
+        ..Default::default()
+    };
+
+    let cfg = Config::load_from_paths(&cli).expect("should load config");
+
+    // Server resolved
+    assert_eq!(cfg.servers.len(), 1);
+    assert_eq!(cfg.servers[0].name, "home-emby");
+    assert_eq!(cfg.servers[0].url, "http://192.168.1.126:8096");
+    assert_eq!(cfg.servers[0].api_key, "test-key-123");
+    assert_eq!(cfg.servers[0].server_type, Some(ServerType::Emby));
+    assert_eq!(
+        cfg.servers[0].libraries["Music"].force_rating.as_deref(),
+        Some("PG-13")
+    );
+
+    // Detection: r.stems overridden, rest defaults
+    assert_eq!(cfg.detection.r_stems, vec!["custom_r"]);
+    assert_eq!(
+        cfg.detection.r_exact,
+        defaults::R_EXACT.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        cfg.detection.pg13_stems,
+        defaults::PG13_STEMS.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        cfg.detection.false_positives,
+        defaults::FALSE_POSITIVES.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+    );
+
+    // Overwrite from TOML (false)
+    assert!(!cfg.overwrite);
+
+    // CLI pass-through
+    assert!(cfg.dry_run);
+    assert!(cfg.verbose);
+    assert_eq!(cfg.library_name.as_deref(), Some("Music"));
+
+    // Report from TOML
+    assert_eq!(
+        cfg.report_path,
+        Some(PathBuf::from("/tmp/default_report.csv"))
     );
 }

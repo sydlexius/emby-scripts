@@ -4,7 +4,7 @@ mod tests;
 
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize, Default)]
 pub struct RawConfig {
@@ -120,4 +120,292 @@ pub struct DetectionConfig {
     pub pg13_exact: Vec<String>,
     pub false_positives: Vec<String>,
     pub g_genres: Vec<String>,
+}
+
+// ── Errors ─────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+pub enum ConfigError {
+    /// TOML file exists but cannot be parsed.
+    TomlParse(toml::de::Error),
+    /// IO error reading the TOML file.
+    Io(std::io::Error),
+    /// A server declared in TOML has no `url` field.
+    ServerMissingUrl(String),
+    /// API key env var not found for a named server.
+    MissingApiKey(String),
+    /// Invalid `type` value (must be "emby" or "jellyfin").
+    InvalidServerType { server: String, value: String },
+    /// `--server` filter names a server not present in config.
+    UnknownServerFilter(String),
+    /// No servers configured (neither TOML nor one-off CLI).
+    NoServers,
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TomlParse(e) => write!(f, "TOML parse error: {e}"),
+            Self::Io(e) => write!(f, "IO error: {e}"),
+            Self::ServerMissingUrl(name) => {
+                write!(f, "server '{name}' has no url")
+            }
+            Self::MissingApiKey(name) => {
+                write!(f, "missing API key env var for server '{name}'")
+            }
+            Self::InvalidServerType { server, value } => {
+                write!(f, "invalid server type '{value}' for server '{server}' (expected 'emby' or 'jellyfin')")
+            }
+            Self::UnknownServerFilter(name) => {
+                write!(f, "unknown server '{name}' in --server filter")
+            }
+            Self::NoServers => write!(f, "no servers configured"),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+// ── CLI input ──────────────────────────────────────────────────────
+
+/// Subset of CLI options needed for config loading.
+/// Kept separate from clap structs so config module doesn't depend on clap.
+#[derive(Debug, Default)]
+pub struct CliInput {
+    pub config_path: Option<PathBuf>,
+    pub env_file: Option<PathBuf>,
+    pub server_url: Option<String>,
+    pub api_key: Option<String>,
+    pub server_filter: Option<Vec<String>>,
+    pub overwrite: Option<bool>,
+    pub dry_run: bool,
+    pub report: Option<String>,
+    pub library: Option<String>,
+    pub location: Option<String>,
+    pub verbose: bool,
+    pub ignore_forced: bool,
+}
+
+// ── Config loading ─────────────────────────────────────────────────
+
+impl Config {
+    /// Build a fully resolved `Config` from TOML file, .env file, and CLI flags.
+    pub fn load_from_paths(cli: &CliInput) -> Result<Config, ConfigError> {
+        // 1. Parse TOML (use defaults if file doesn't exist)
+        let raw = match &cli.config_path {
+            Some(path) => read_toml(path)?,
+            None => RawConfig::default(),
+        };
+
+        // 2. Load .env file (ignore errors — file may not exist)
+        if let Some(env_path) = &cli.env_file {
+            let _ = dotenvy::from_path(env_path);
+        }
+
+        // 3. Resolve servers
+        let servers = resolve_servers(&raw, cli)?;
+
+        // 4. Resolve detection
+        let detection = resolve_detection(&raw);
+
+        // 5. Resolve overwrite: CLI > TOML > default (true)
+        let overwrite = cli.overwrite.unwrap_or_else(|| {
+            raw.general
+                .as_ref()
+                .and_then(|g| g.overwrite)
+                .unwrap_or(true)
+        });
+
+        // 6. Resolve report path: CLI > TOML > None
+        let report_path = cli
+            .report
+            .as_ref()
+            .map(PathBuf::from)
+            .or_else(|| {
+                raw.report
+                    .as_ref()
+                    .and_then(|r| r.output_path.as_ref())
+                    .map(PathBuf::from)
+            });
+
+        Ok(Config {
+            servers,
+            detection,
+            overwrite,
+            dry_run: cli.dry_run,
+            report_path,
+            library_name: cli.library.clone(),
+            location_name: cli.location.clone(),
+            verbose: cli.verbose,
+            ignore_forced: cli.ignore_forced,
+        })
+    }
+}
+
+fn read_toml(path: &Path) -> Result<RawConfig, ConfigError> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => parse_toml(&content).map_err(ConfigError::TomlParse),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(RawConfig::default()),
+        Err(e) => Err(ConfigError::Io(e)),
+    }
+}
+
+fn resolve_servers(raw: &RawConfig, cli: &CliInput) -> Result<Vec<ServerConfig>, ConfigError> {
+    // One-off mode: --server-url + --api-key
+    if let (Some(url), Some(key)) = (&cli.server_url, &cli.api_key) {
+        return Ok(vec![ServerConfig {
+            name: "cli".to_string(),
+            url: url.clone(),
+            api_key: key.clone(),
+            server_type: None,
+            libraries: HashMap::new(),
+        }]);
+    }
+
+    // TOML servers
+    let raw_servers = match &raw.servers {
+        Some(s) if !s.is_empty() => s,
+        _ => return Err(ConfigError::NoServers),
+    };
+
+    let mut servers = Vec::new();
+    for (label, raw_srv) in raw_servers {
+        let url = raw_srv
+            .url
+            .as_ref()
+            .ok_or_else(|| ConfigError::ServerMissingUrl(label.clone()))?;
+
+        // API key: {LABEL_UPPER}_API_KEY (hyphens → underscores)
+        let env_key = format!(
+            "{}_API_KEY",
+            label.to_uppercase().replace('-', "_")
+        );
+        let api_key = std::env::var(&env_key)
+            .map_err(|_| ConfigError::MissingApiKey(label.clone()))?;
+
+        let server_type = match &raw_srv.server_type {
+            Some(t) => Some(parse_server_type(label, t)?),
+            None => None,
+        };
+
+        let libraries = resolve_libraries(raw_srv);
+
+        servers.push(ServerConfig {
+            name: label.clone(),
+            url: url.clone(),
+            api_key,
+            server_type,
+            libraries,
+        });
+    }
+
+    // Apply --server filter
+    if let Some(filter) = &cli.server_filter {
+        for name in filter {
+            if !servers.iter().any(|s| s.name == *name) {
+                return Err(ConfigError::UnknownServerFilter(name.clone()));
+            }
+        }
+        servers.retain(|s| filter.contains(&s.name));
+    }
+
+    if servers.is_empty() {
+        return Err(ConfigError::NoServers);
+    }
+
+    Ok(servers)
+}
+
+fn parse_server_type(label: &str, value: &str) -> Result<ServerType, ConfigError> {
+    match value.to_lowercase().as_str() {
+        "emby" => Ok(ServerType::Emby),
+        "jellyfin" => Ok(ServerType::Jellyfin),
+        _ => Err(ConfigError::InvalidServerType {
+            server: label.to_string(),
+            value: value.to_string(),
+        }),
+    }
+}
+
+fn resolve_libraries(raw_srv: &RawServerConfig) -> HashMap<String, LibraryConfig> {
+    let Some(raw_libs) = &raw_srv.libraries else {
+        return HashMap::new();
+    };
+
+    raw_libs
+        .iter()
+        .map(|(name, raw_lib)| {
+            let locations = raw_lib
+                .locations
+                .as_ref()
+                .map(|locs| {
+                    locs.iter()
+                        .map(|(loc_name, raw_loc)| {
+                            (
+                                loc_name.clone(),
+                                LocationConfig {
+                                    force_rating: raw_loc.force_rating.clone(),
+                                },
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            (
+                name.clone(),
+                LibraryConfig {
+                    force_rating: raw_lib.force_rating.clone(),
+                    locations,
+                },
+            )
+        })
+        .collect()
+}
+
+fn to_owned_vec(defaults: &[&str]) -> Vec<String> {
+    defaults.iter().map(|s| s.to_string()).collect()
+}
+
+fn resolve_detection(raw: &RawConfig) -> DetectionConfig {
+    let det = raw.detection.as_ref();
+
+    let r_stems = det
+        .and_then(|d| d.r.as_ref())
+        .and_then(|w| w.stems.clone())
+        .unwrap_or_else(|| to_owned_vec(defaults::R_STEMS));
+
+    let r_exact = det
+        .and_then(|d| d.r.as_ref())
+        .and_then(|w| w.exact.clone())
+        .unwrap_or_else(|| to_owned_vec(defaults::R_EXACT));
+
+    let pg13_stems = det
+        .and_then(|d| d.pg13.as_ref())
+        .and_then(|w| w.stems.clone())
+        .unwrap_or_else(|| to_owned_vec(defaults::PG13_STEMS));
+
+    let pg13_exact = det
+        .and_then(|d| d.pg13.as_ref())
+        .and_then(|w| w.exact.clone())
+        .unwrap_or_else(|| to_owned_vec(defaults::PG13_EXACT));
+
+    let false_positives = det
+        .and_then(|d| d.ignore.as_ref())
+        .and_then(|i| i.false_positives.clone())
+        .unwrap_or_else(|| to_owned_vec(defaults::FALSE_POSITIVES));
+
+    let g_genres = det
+        .and_then(|d| d.g_genres.as_ref())
+        .and_then(|g| g.genres.clone())
+        .unwrap_or_default();
+
+    DetectionConfig {
+        r_stems,
+        r_exact,
+        pg13_stems,
+        pg13_exact,
+        false_positives,
+        g_genres,
+    }
 }
