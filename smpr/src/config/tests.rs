@@ -60,7 +60,10 @@ output_path = "/tmp/report.csv"
     let jf = &servers["prod-jellyfin"];
     assert_eq!(jf.server_type.as_deref(), Some("jellyfin"));
     let jf_libs = jf.libraries.as_ref().unwrap();
-    assert_eq!(jf_libs["Classical Music"].force_rating.as_deref(), Some("G"));
+    assert_eq!(
+        jf_libs["Classical Music"].force_rating.as_deref(),
+        Some("G")
+    );
 
     // Detection
     let det = raw.detection.as_ref().unwrap();
@@ -145,7 +148,10 @@ exact = ["custom_exact"]
     let raw = parse_toml(toml).expect("should parse partial detection");
     let det = raw.detection.as_ref().unwrap();
     assert!(det.r.is_some());
-    assert_eq!(det.r.as_ref().unwrap().stems.as_deref().unwrap(), &["custom"]);
+    assert_eq!(
+        det.r.as_ref().unwrap().stems.as_deref().unwrap(),
+        &["custom"]
+    );
     assert_eq!(
         det.r.as_ref().unwrap().exact.as_deref().unwrap(),
         &["custom_exact"]
@@ -234,15 +240,24 @@ output_path = "/tmp/default_report.csv"
     assert_eq!(cfg.detection.r_stems, vec!["custom_r"]);
     assert_eq!(
         cfg.detection.r_exact,
-        defaults::R_EXACT.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        defaults::R_EXACT
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         cfg.detection.pg13_stems,
-        defaults::PG13_STEMS.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        defaults::PG13_STEMS
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         cfg.detection.false_positives,
-        defaults::FALSE_POSITIVES.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        defaults::FALSE_POSITIVES
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
     );
 
     // Overwrite from TOML (false)
@@ -272,7 +287,9 @@ url = "http://localhost:8096"
     toml_file.write_all(toml_content.as_bytes()).unwrap();
 
     // Ensure the env var does NOT exist
-    unsafe { std::env::remove_var("NOKEY_SERVER_API_KEY"); }
+    unsafe {
+        std::env::remove_var("NOKEY_SERVER_API_KEY");
+    }
 
     let cli = CliInput {
         config_path: Some(toml_file.path().to_path_buf()),
@@ -296,7 +313,9 @@ type = "emby"
     let mut toml_file = NamedTempFile::new().unwrap();
     toml_file.write_all(toml_content.as_bytes()).unwrap();
 
-    unsafe { std::env::set_var("BAD_SERVER_API_KEY", "dummy"); }
+    unsafe {
+        std::env::set_var("BAD_SERVER_API_KEY", "dummy");
+    }
 
     let cli = CliInput {
         config_path: Some(toml_file.path().to_path_buf()),
@@ -310,7 +329,9 @@ type = "emby"
         "expected 'no url' error, got: {msg}"
     );
 
-    unsafe { std::env::remove_var("BAD_SERVER_API_KEY"); }
+    unsafe {
+        std::env::remove_var("BAD_SERVER_API_KEY");
+    }
 }
 
 #[test]
@@ -323,7 +344,9 @@ type = "plex"
     let mut toml_file = NamedTempFile::new().unwrap();
     toml_file.write_all(toml_content.as_bytes()).unwrap();
 
-    unsafe { std::env::set_var("PLEX_SERVER_API_KEY", "dummy"); }
+    unsafe {
+        std::env::set_var("PLEX_SERVER_API_KEY", "dummy");
+    }
 
     let cli = CliInput {
         config_path: Some(toml_file.path().to_path_buf()),
@@ -337,7 +360,9 @@ type = "plex"
         "expected invalid server type error, got: {msg}"
     );
 
-    unsafe { std::env::remove_var("PLEX_SERVER_API_KEY"); }
+    unsafe {
+        std::env::remove_var("PLEX_SERVER_API_KEY");
+    }
 }
 
 #[test]
@@ -349,7 +374,9 @@ url = "http://localhost:8096"
     let mut toml_file = NamedTempFile::new().unwrap();
     toml_file.write_all(toml_content.as_bytes()).unwrap();
 
-    unsafe { std::env::set_var("REAL_SERVER_API_KEY", "dummy"); }
+    unsafe {
+        std::env::set_var("REAL_SERVER_API_KEY", "dummy");
+    }
 
     let cli = CliInput {
         config_path: Some(toml_file.path().to_path_buf()),
@@ -368,7 +395,9 @@ url = "http://localhost:8096"
         "expected available servers to be listed, got: {msg}"
     );
 
-    unsafe { std::env::remove_var("REAL_SERVER_API_KEY"); }
+    unsafe {
+        std::env::remove_var("REAL_SERVER_API_KEY");
+    }
 }
 
 #[test]
@@ -461,7 +490,10 @@ fn overwrite_default_when_toml_omits() {
     };
 
     let cfg = Config::load_from_paths(&cli).expect("should load");
-    assert!(cfg.overwrite, "default should be true when neither CLI nor TOML set");
+    assert!(
+        cfg.overwrite,
+        "default should be true when neither CLI nor TOML set"
+    );
 }
 
 #[test]
@@ -478,11 +510,17 @@ fn missing_toml_file_uses_defaults() {
     // Detection defaults
     assert_eq!(
         cfg.detection.r_stems,
-        defaults::R_STEMS.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        defaults::R_STEMS
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
     );
     assert_eq!(
         cfg.detection.pg13_stems,
-        defaults::PG13_STEMS.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        defaults::PG13_STEMS
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
     );
     assert!(cfg.overwrite); // default
 }

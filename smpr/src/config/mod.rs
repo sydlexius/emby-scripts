@@ -143,7 +143,10 @@ pub enum ConfigError {
     /// .env file explicitly specified but could not be loaded.
     EnvFile(String),
     /// `--server` filter names a server not present in config.
-    UnknownServerFilter { requested: String, available: Vec<String> },
+    UnknownServerFilter {
+        requested: String,
+        available: Vec<String>,
+    },
     /// No servers configured (neither TOML nor one-off CLI).
     NoServers,
 }
@@ -160,11 +163,21 @@ impl std::fmt::Display for ConfigError {
                 write!(f, "missing API key env var for server '{name}'")
             }
             Self::InvalidServerType { server, value } => {
-                write!(f, "invalid server type '{value}' for server '{server}' (expected 'emby' or 'jellyfin')")
+                write!(
+                    f,
+                    "invalid server type '{value}' for server '{server}' (expected 'emby' or 'jellyfin')"
+                )
             }
             Self::EnvFile(msg) => write!(f, "env file error: {msg}"),
-            Self::UnknownServerFilter { requested, available } => {
-                write!(f, "unknown server '{requested}' in --server filter. Available: {}", available.join(", "))
+            Self::UnknownServerFilter {
+                requested,
+                available,
+            } => {
+                write!(
+                    f,
+                    "unknown server '{requested}' in --server filter. Available: {}",
+                    available.join(", ")
+                )
             }
             Self::NoServers => write!(f, "no servers configured"),
         }
@@ -202,8 +215,7 @@ impl Config {
         let raw = match &cli.config_path {
             Some(path) => {
                 // User explicitly specified --config; missing file is an error
-                let content = std::fs::read_to_string(path)
-                    .map_err(ConfigError::Io)?;
+                let content = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
                 parse_toml(&content).map_err(ConfigError::TomlParse)?
             }
             None => {
@@ -233,16 +245,12 @@ impl Config {
         });
 
         // 6. Resolve report path: CLI > TOML > None
-        let report_path = cli
-            .report
-            .as_ref()
-            .map(PathBuf::from)
-            .or_else(|| {
-                raw.report
-                    .as_ref()
-                    .and_then(|r| r.output_path.as_ref())
-                    .map(PathBuf::from)
-            });
+        let report_path = cli.report.as_ref().map(PathBuf::from).or_else(|| {
+            raw.report
+                .as_ref()
+                .and_then(|r| r.output_path.as_ref())
+                .map(PathBuf::from)
+        });
 
         Ok(Config {
             servers,
@@ -284,12 +292,9 @@ fn resolve_servers(raw: &RawConfig, cli: &CliInput) -> Result<Vec<ServerConfig>,
             .ok_or_else(|| ConfigError::ServerMissingUrl(label.clone()))?;
 
         // API key: {LABEL_UPPER}_API_KEY (hyphens → underscores)
-        let env_key = format!(
-            "{}_API_KEY",
-            label.to_uppercase().replace('-', "_")
-        );
-        let api_key = std::env::var(&env_key)
-            .map_err(|_| ConfigError::MissingApiKey(label.clone()))?;
+        let env_key = format!("{}_API_KEY", label.to_uppercase().replace('-', "_"));
+        let api_key =
+            std::env::var(&env_key).map_err(|_| ConfigError::MissingApiKey(label.clone()))?;
 
         let server_type = match &raw_srv.server_type {
             Some(t) => Some(parse_server_type(label, t)?),
@@ -385,18 +390,24 @@ fn resolve_detection(raw: &RawConfig) -> DetectionConfig {
     let pg13 = det.and_then(|d| d.pg13.as_ref());
 
     DetectionConfig {
-        r_stems: r.and_then(|w| w.stems.clone())
+        r_stems: r
+            .and_then(|w| w.stems.clone())
             .unwrap_or_else(|| to_owned_vec(defaults::R_STEMS)),
-        r_exact: r.and_then(|w| w.exact.clone())
+        r_exact: r
+            .and_then(|w| w.exact.clone())
             .unwrap_or_else(|| to_owned_vec(defaults::R_EXACT)),
-        pg13_stems: pg13.and_then(|w| w.stems.clone())
+        pg13_stems: pg13
+            .and_then(|w| w.stems.clone())
             .unwrap_or_else(|| to_owned_vec(defaults::PG13_STEMS)),
-        pg13_exact: pg13.and_then(|w| w.exact.clone())
+        pg13_exact: pg13
+            .and_then(|w| w.exact.clone())
             .unwrap_or_else(|| to_owned_vec(defaults::PG13_EXACT)),
-        false_positives: det.and_then(|d| d.ignore.as_ref())
+        false_positives: det
+            .and_then(|d| d.ignore.as_ref())
             .and_then(|i| i.false_positives.clone())
             .unwrap_or_else(|| to_owned_vec(defaults::FALSE_POSITIVES)),
-        g_genres: det.and_then(|d| d.g_genres.as_ref())
+        g_genres: det
+            .and_then(|d| d.g_genres.as_ref())
             .and_then(|g| g.genres.clone())
             .unwrap_or_default(),
     }
