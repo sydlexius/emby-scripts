@@ -30,9 +30,8 @@ fn compile_exact_patterns(words: &[String]) -> Vec<(String, Regex)> {
 fn detect_stems(word_tokens: &[&str], stems: &[String], false_positives: &[String]) -> Vec<String> {
     let mut matched = Vec::new();
     for stem in stems {
-        let stem_l = stem.to_lowercase();
         for &word in word_tokens {
-            if word.contains(stem_l.as_str()) {
+            if word.contains(stem.as_str()) {
                 let is_fp = false_positives.iter().any(|fp| word.contains(fp.as_str()));
                 if !is_fp {
                     matched.push(word.to_string());
@@ -55,8 +54,8 @@ fn detect_exact(text: &str, patterns: &[(String, Regex)]) -> Vec<String> {
 
 #[allow(dead_code)]
 fn dedup_matched(stem_hits: Vec<String>, exact_hits: Vec<String>) -> Vec<String> {
-    let mut result = stem_hits;
-    for word in exact_hits {
+    let mut result = Vec::new();
+    for word in stem_hits.into_iter().chain(exact_hits) {
         if !result.contains(&word) {
             result.push(word);
         }
@@ -68,9 +67,9 @@ impl DetectionEngine {
     #[allow(dead_code)]
     pub fn new(config: &DetectionConfig) -> Self {
         Self {
-            r_stems: config.r_stems.clone(),
+            r_stems: config.r_stems.iter().map(|s| s.to_lowercase()).collect(),
             r_exact_patterns: compile_exact_patterns(&config.r_exact),
-            pg13_stems: config.pg13_stems.clone(),
+            pg13_stems: config.pg13_stems.iter().map(|s| s.to_lowercase()).collect(),
             pg13_exact_patterns: compile_exact_patterns(&config.pg13_exact),
             false_positives: config
                 .false_positives
@@ -186,12 +185,14 @@ mod tests {
 
     #[test]
     fn stems_case_handling() {
-        // stems are lowercased internally; tokens are already lowercase from tokenizer
-        let tokens: Vec<&str> = vec!["shitty"];
-        let stems = vec!["SHIT".into()]; // uppercase stem from config
-        let fp: Vec<String> = vec![];
-        let result = detect_stems(&tokens, &stems, &fp);
-        assert_eq!(result, vec!["shitty"]);
+        // stems are pre-lowercased by DetectionEngine::new; verify via the engine
+        let mut config = test_config();
+        config.r_stems = vec!["SHIT".into()]; // uppercase in config
+        let engine = DetectionEngine::new(&config);
+        // constructor lowercases stems, so classify_lyrics should still match
+        let (tier, words) = engine.classify_lyrics("shitty behavior");
+        assert_eq!(tier, Some("R"));
+        assert!(words.contains(&"shitty".to_string()));
     }
 
     #[test]
