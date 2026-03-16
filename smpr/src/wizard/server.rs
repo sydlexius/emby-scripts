@@ -44,7 +44,13 @@ impl inquire::Autocomplete for UrlAutocomplete {
 
 fn validate_url(input: &str) -> Result<String, String> {
     let trimmed = input.trim();
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    if let Some(rest) = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"))
+    {
+        if rest.is_empty() || rest == "/" {
+            return Err("URL must include a hostname after the scheme".to_string());
+        }
         Ok(trimmed.to_string())
     } else {
         Err("URL must start with http:// or https://".to_string())
@@ -52,13 +58,34 @@ fn validate_url(input: &str) -> Result<String, String> {
 }
 
 fn suggest_label(url: &str) -> String {
-    url.trim_start_matches("http://")
+    let host_port = url
+        .trim_start_matches("http://")
         .trim_start_matches("https://")
+        .split('/')
+        .next()
+        .unwrap_or("server");
+    host_port
         .split(':')
         .next()
         .unwrap_or("server")
         .replace('.', "-")
         .to_lowercase()
+}
+
+fn validate_label(input: &str) -> Result<String, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err("Label cannot be empty".to_string());
+    }
+    if !trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(
+            "Label can only contain letters, numbers, hyphens, and underscores".to_string(),
+        );
+    }
+    Ok(trimmed.to_string())
 }
 
 pub fn prompt_server(verbose: bool) -> Result<ServerInfo, WizardError> {
@@ -103,6 +130,10 @@ pub fn prompt_server(verbose: bool) -> Result<ServerInfo, WizardError> {
     let label = inquire::Text::new("Label for this server:")
         .with_default(&default_label)
         .with_help_message("Used in config file section name and env var prefix")
+        .with_validator(|input: &str| match validate_label(input) {
+            Ok(_) => Ok(inquire::validator::Validation::Valid),
+            Err(e) => Ok(inquire::validator::Validation::Invalid(e.into())),
+        })
         .prompt()
         .map_err(from_inquire)?;
 
@@ -126,5 +157,6 @@ mod tests {
             "media-example-com"
         );
         assert_eq!(suggest_label("http://192.168.1.126:8096"), "192-168-1-126");
+        assert_eq!(suggest_label("http://host:8096/emby"), "host");
     }
 }

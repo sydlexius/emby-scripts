@@ -281,43 +281,41 @@ pub fn resolve_default_env_path(config_path: Option<&std::path::Path>) -> Option
 impl Config {
     /// Build a fully resolved `Config` from TOML file, .env file, and CLI flags.
     pub fn load_from_paths(cli: &CliInput) -> Result<Config, ConfigError> {
-        // 1. Parse TOML
-        let raw = match &cli.config_path {
-            Some(path) => {
+        // 1. Resolve config path
+        let resolved_config_path = cli.config_path.clone().or_else(resolve_default_config_path);
+
+        // 2. Parse TOML
+        let raw = match &resolved_config_path {
+            Some(path) if cli.config_path.is_some() => {
                 // User explicitly specified --config; missing file is an error
                 let content = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
                 parse_toml(&content).map_err(ConfigError::TomlParse)?
             }
-            None => {
-                // No --config provided; try auto-discovery
-                if let Some(path) = resolve_default_config_path() {
-                    log::debug!("Auto-discovered config at {}", path.display());
-                    let content = std::fs::read_to_string(&path).map_err(ConfigError::Io)?;
-                    parse_toml(&content).map_err(ConfigError::TomlParse)?
-                } else {
-                    RawConfig::default()
-                }
+            Some(path) => {
+                // Auto-discovered config
+                log::debug!("Auto-discovered config at {}", path.display());
+                let content = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
+                parse_toml(&content).map_err(ConfigError::TomlParse)?
             }
+            None => RawConfig::default(),
         };
 
-        // 2. Load .env file (explicit path must succeed)
+        // 3. Load .env file (explicit path must succeed)
         if let Some(env_path) = &cli.env_file {
             dotenvy::from_path(env_path)
                 .map_err(|e| ConfigError::EnvFile(format!("{}: {e}", env_path.display())))?;
-        } else if let Some(env_path) =
-            resolve_default_env_path(resolve_default_config_path().as_deref())
-        {
+        } else if let Some(env_path) = resolve_default_env_path(resolved_config_path.as_deref()) {
             log::debug!("Auto-discovered .env at {}", env_path.display());
             let _ = dotenvy::from_path(&env_path); // best-effort, don't fail
         }
 
-        // 3. Resolve servers
+        // 4. Resolve servers
         let servers = resolve_servers(&raw, cli)?;
 
-        // 4. Resolve detection
+        // 5. Resolve detection
         let detection = resolve_detection(&raw);
 
-        // 5. Resolve overwrite: CLI > TOML > default (true)
+        // 6. Resolve overwrite: CLI > TOML > default (true)
         let overwrite = cli.overwrite.unwrap_or_else(|| {
             raw.general
                 .as_ref()
@@ -325,7 +323,7 @@ impl Config {
                 .unwrap_or(true)
         });
 
-        // 6. Resolve report path: CLI > TOML > None
+        // 7. Resolve report path: CLI > TOML > None
         let report_path = cli.report.as_ref().map(PathBuf::from).or_else(|| {
             raw.report
                 .as_ref()

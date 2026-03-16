@@ -74,7 +74,11 @@ fn from_inquire(e: inquire::InquireError) -> WizardError {
 pub fn resolve_config_dir(cli_config: Option<&str>) -> PathBuf {
     if let Some(path) = cli_config {
         let p = PathBuf::from(path);
-        return p.parent().unwrap_or(&p).to_path_buf();
+        let parent = p.parent().unwrap_or(&p);
+        if parent.as_os_str().is_empty() {
+            return std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        }
+        return parent.to_path_buf();
     }
 
     let cwd_config = std::env::current_dir()
@@ -99,11 +103,16 @@ pub fn run_wizard(
 ) -> Result<(), WizardError> {
     let config_dir = resolve_config_dir(cli_config);
     let config_filename = if let Some(cfg) = cli_config {
-        PathBuf::from(cfg)
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string()
+        let cfg_path = PathBuf::from(cfg);
+        match cfg_path.file_name() {
+            Some(name) => name.to_string_lossy().to_string(),
+            None => {
+                return Err(WizardError::Prompt(format!(
+                    "invalid --config path (expected a file path): {}",
+                    cfg_path.display()
+                )));
+            }
+        }
     } else if config_dir == std::env::current_dir().unwrap_or_default() {
         "explicit_config.toml".to_string()
     } else {
@@ -158,7 +167,7 @@ pub fn run_wizard(
     let server_info = server::prompt_server(verbose)?;
 
     // Step 2: Authentication
-    let api_key = auth::prompt_auth(&server_info.url, verbose)?;
+    let api_key = auth::prompt_auth(&server_info.url, &server_info.server_type, verbose)?;
 
     // Construct client for API calls in subsequent steps
     let client = crate::server::MediaServerClient::new(
@@ -167,14 +176,29 @@ pub fn run_wizard(
         server_info.server_type.clone(),
     );
 
-    // Step 3: Library & genre discovery
-    let genre_config = library::prompt_library_and_genres(&client, verbose)?;
-
-    // Step 4: Detection rules
-    let detection_config = detection::prompt_detection(verbose)?;
-
-    // Step 5: Preferences
-    let prefs = preferences::prompt_preferences()?;
+    // Steps 3-5 only run for fresh config (not when adding a server)
+    let (genre_config, detection_config, prefs) = if existing.is_some() {
+        // Adding a server — skip detection/genre/preference prompts
+        (
+            library::GenreConfig { genres: vec![] },
+            detection::DetectionAdditions {
+                extra_r_stems: vec![],
+                extra_r_exact: vec![],
+                extra_pg13_stems: vec![],
+                extra_pg13_exact: vec![],
+                extra_false_positives: vec![],
+            },
+            preferences::Preferences { overwrite: true },
+        )
+    } else {
+        // Step 3: Library & genre discovery
+        let genre_config = library::prompt_library_and_genres(&client, verbose)?;
+        // Step 4: Detection rules
+        let detection_config = detection::prompt_detection(verbose)?;
+        // Step 5: Preferences
+        let prefs = preferences::prompt_preferences()?;
+        (genre_config, detection_config, prefs)
+    };
 
     // Step 6: Write output
     output::write_config(

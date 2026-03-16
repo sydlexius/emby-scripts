@@ -1,7 +1,11 @@
 use super::{WizardError, from_inquire};
 use crate::server;
 
-pub fn prompt_auth(url: &str, verbose: bool) -> Result<String, WizardError> {
+pub fn prompt_auth(
+    url: &str,
+    server_type: &crate::config::ServerType,
+    verbose: bool,
+) -> Result<String, WizardError> {
     println!("\n── Authentication ──\n");
 
     let options = vec![
@@ -22,9 +26,8 @@ pub fn prompt_auth(url: &str, verbose: bool) -> Result<String, WizardError> {
     if verbose {
         eprintln!("Validating API key...");
     }
-    let server_type = server::detect_server_type(url)
-        .map_err(|e| WizardError::ServerUnreachable(e.to_string()))?;
-    let client = server::MediaServerClient::new(url.to_string(), api_key.clone(), server_type);
+    let client =
+        server::MediaServerClient::new(url.to_string(), api_key.clone(), server_type.clone());
     match client.get_user_id() {
         Ok(_) => println!("  Authentication successful."),
         Err(e) => {
@@ -43,7 +46,9 @@ fn prompt_username_password(url: &str, verbose: bool) -> Result<String, WizardEr
     for attempt in 1..=MAX_RETRIES {
         let username = inquire::Text::new("Username:")
             .prompt()
-            .map_err(from_inquire)?;
+            .map_err(from_inquire)?
+            .trim()
+            .to_string();
 
         let password = inquire::Password::new("Password:")
             .without_confirmation()
