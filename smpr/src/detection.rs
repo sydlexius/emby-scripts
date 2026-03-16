@@ -2,10 +2,8 @@ use crate::config::DetectionConfig;
 use regex::Regex;
 use std::sync::LazyLock;
 
-#[allow(dead_code)]
 static WORD_TOKENIZER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[a-z']+").unwrap());
 
-#[allow(dead_code)]
 pub struct DetectionEngine {
     r_stems: Vec<String>,
     r_exact_patterns: Vec<(String, Regex)>,
@@ -15,7 +13,6 @@ pub struct DetectionEngine {
     g_genres: Vec<String>,
 }
 
-#[allow(dead_code)]
 fn compile_exact_patterns(words: &[String]) -> Vec<(String, Regex)> {
     words
         .iter()
@@ -26,7 +23,6 @@ fn compile_exact_patterns(words: &[String]) -> Vec<(String, Regex)> {
         .collect()
 }
 
-#[allow(dead_code)]
 fn detect_stems(word_tokens: &[&str], stems: &[String], false_positives: &[String]) -> Vec<String> {
     let mut matched = Vec::new();
     for stem in stems {
@@ -43,7 +39,6 @@ fn detect_stems(word_tokens: &[&str], stems: &[String], false_positives: &[Strin
     matched
 }
 
-#[allow(dead_code)]
 fn detect_exact(text: &str, patterns: &[(String, Regex)]) -> Vec<String> {
     patterns
         .iter()
@@ -52,7 +47,6 @@ fn detect_exact(text: &str, patterns: &[(String, Regex)]) -> Vec<String> {
         .collect()
 }
 
-#[allow(dead_code)]
 fn dedup_matched(stem_hits: Vec<String>, exact_hits: Vec<String>) -> Vec<String> {
     let mut result = Vec::new();
     for word in stem_hits.into_iter().chain(exact_hits) {
@@ -64,7 +58,6 @@ fn dedup_matched(stem_hits: Vec<String>, exact_hits: Vec<String>) -> Vec<String>
 }
 
 impl DetectionEngine {
-    #[allow(dead_code)]
     pub fn new(config: &DetectionConfig) -> Self {
         Self {
             r_stems: config.r_stems.iter().map(|s| s.to_lowercase()).collect(),
@@ -80,7 +73,6 @@ impl DetectionEngine {
         }
     }
 
-    #[allow(dead_code)]
     pub fn match_g_genre<'a>(&self, genres: &'a [String]) -> Option<&'a str> {
         for genre in genres {
             if self.g_genres.contains(&genre.to_lowercase()) {
@@ -90,7 +82,6 @@ impl DetectionEngine {
         None
     }
 
-    #[allow(dead_code)]
     pub fn classify_lyrics(&self, text: &str) -> (Option<&'static str>, Vec<String>) {
         if text.trim().is_empty() {
             return (None, vec![]);

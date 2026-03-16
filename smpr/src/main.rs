@@ -7,6 +7,7 @@ mod tui;
 mod util;
 
 use clap::{Args, Parser, Subcommand};
+use log::LevelFilter;
 use std::path::PathBuf;
 use std::process;
 
@@ -173,8 +174,112 @@ fn load_config(
     })
 }
 
+/// Which workflow to run (avoids passing &Commands through the borrow checker).
+enum Workflow {
+    Rate,
+    Force(String), // target_rating
+    Reset,
+}
+
+fn run_workflows(cfg: &config::Config, workflow: &Workflow) {
+    let multi = cfg.servers.len() > 1;
+    let mut all_results: Vec<rating::ItemResult> = Vec::new();
+    let mut had_failure = false;
+
+    for server_config in &cfg.servers {
+        let server_type = match server_config.server_type.clone() {
+            Some(t) => t,
+            None => match server::detect_server_type(&server_config.url) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!(
+                        "Error: failed to detect server type for '{}': {e}",
+                        server_config.name
+                    );
+                    had_failure = true;
+                    continue;
+                }
+            },
+        };
+
+        let label = if multi {
+            format!("{} ({:?})", server_config.name, server_type)
+        } else {
+            String::new()
+        };
+        if multi {
+            eprintln!("--- Processing {} ---", label);
+        }
+
+        let client = server::MediaServerClient::new(
+            server_config.url.clone(),
+            server_config.api_key.clone(),
+            server_type,
+        );
+
+        let results = match workflow {
+            Workflow::Rate => {
+                let engine = detection::DetectionEngine::new(&cfg.detection);
+                rating::rate_workflow(&client, cfg, server_config, &engine)
+            }
+            Workflow::Force(target_rating) => {
+                rating::force_workflow(&client, cfg, server_config, target_rating)
+            }
+            Workflow::Reset => rating::reset_workflow(&client, cfg, server_config),
+        };
+
+        match results {
+            Ok(results) => {
+                if multi {
+                    rating::print_summary(&results, &label);
+                }
+                all_results.extend(results);
+            }
+            Err(e) => {
+                eprintln!(
+                    "Error: {} failed: {e}",
+                    if label.is_empty() { "Server" } else { &label }
+                );
+                had_failure = true;
+            }
+        }
+    }
+
+    // Write report
+    if let Some(ref report_path) = cfg.report_path {
+        report::write_report(&all_results, report_path);
+    }
+
+    // Print summary (single server, or overall for multi)
+    if !multi {
+        rating::print_summary(&all_results, "");
+    }
+
+    if had_failure {
+        process::exit(1);
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
+
+    // Determine verbose from any subcommand before initializing logger
+    let verbose = match &cli.command {
+        Commands::Rate { common, .. }
+        | Commands::Force { common, .. }
+        | Commands::Reset { common } => common.verbose,
+        Commands::Configure { verbose, .. } => *verbose,
+    };
+
+    env_logger::Builder::new()
+        .filter_level(if verbose {
+            LevelFilter::Debug
+        } else {
+            LevelFilter::Warn
+        })
+        .format_target(false)
+        .format_timestamp(None)
+        .init();
 
     match cli.command {
         Commands::Rate {
@@ -183,34 +288,19 @@ fn main() {
             ignore_forced,
         } => {
             let cfg = load_config(&common, overwrite.resolve(), ignore_forced);
-            if cfg.verbose {
-                eprintln!("Config loaded: {} server(s)", cfg.servers.len());
-            }
-            eprintln!("rate: not yet implemented");
-            process::exit(1);
+            run_workflows(&cfg, &Workflow::Rate);
         }
         Commands::Force {
-            rating,
+            rating: target_rating,
             common,
             overwrite,
         } => {
             let cfg = load_config(&common, overwrite.resolve(), false);
-            if cfg.verbose {
-                eprintln!(
-                    "Config loaded: {} server(s), force rating={rating}",
-                    cfg.servers.len()
-                );
-            }
-            eprintln!("force: not yet implemented");
-            process::exit(1);
+            run_workflows(&cfg, &Workflow::Force(target_rating));
         }
         Commands::Reset { common } => {
             let cfg = load_config(&common, None, false);
-            if cfg.verbose {
-                eprintln!("Config loaded: {} server(s)", cfg.servers.len());
-            }
-            eprintln!("reset: not yet implemented");
-            process::exit(1);
+            run_workflows(&cfg, &Workflow::Reset);
         }
         Commands::Configure { .. } => {
             eprintln!("configure: not yet implemented");

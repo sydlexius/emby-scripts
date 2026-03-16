@@ -22,6 +22,8 @@ pub struct SystemInfoPublic {
 #[serde(rename_all = "PascalCase")]
 pub struct UserInfo {
     pub id: String,
+    // Present in API response; not consumed by current workflows.
+    #[allow(dead_code)]
     pub name: Option<String>,
 }
 
@@ -37,6 +39,8 @@ pub struct VirtualFolder {
 }
 
 /// Single genre from GET /MusicGenres.
+// Used by list_genres(), which is defined for future genre-inspection workflows.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GenreItem {
@@ -44,6 +48,8 @@ pub struct GenreItem {
 }
 
 /// Response from GET /MusicGenres.
+// Used by list_genres(), which is defined for future genre-inspection workflows.
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GenreResponse {
@@ -87,5 +93,7 @@ pub struct LyricsResponse {
 #[serde(rename_all = "PascalCase")]
 pub struct LyricLine {
     pub text: Option<String>,
+    // Present in API response; not consumed by current workflows.
+    #[allow(dead_code)]
     pub start: Option<i64>,
 }
