@@ -1,6 +1,3 @@
-// Remove this allow after wiring report output in Task 10.
-#![allow(dead_code)]
-
 use crate::rating::ItemResult;
 use std::path::Path;
 

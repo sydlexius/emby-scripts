@@ -1,7 +1,3 @@
-// Rating types and functions are consumed by main.rs workflows.
-// Remove this allow after wiring workflows in Task 8.
-#![allow(dead_code)]
-
 pub mod action;
 pub mod scope;
 
@@ -76,6 +72,10 @@ impl Source {
 /// Result of processing a single audio track.
 #[derive(Debug)]
 pub struct ItemResult {
+    #[expect(
+        dead_code,
+        reason = "written for future item-level operations and CSV export"
+    )]
     pub item_id: String,
     pub path: Option<String>,
     pub artist: Option<String>,
@@ -451,4 +451,95 @@ pub fn reset_workflow(
         });
     }
     Ok(results)
+}
+
+/// Counts for summary output.
+#[derive(Debug, Default)]
+pub struct SummaryCounts {
+    pub lyrics_evaluated: usize,
+    pub r_rated: usize,
+    pub pg13: usize,
+    pub clean: usize,
+    pub ratings_set: usize,
+    pub already_correct: usize,
+    pub cleared: usize,
+    pub g_genre_set: usize,
+    pub g_genre_already: usize,
+    pub g_genre_dry: usize,
+    pub dry_run: usize,
+    pub skipped: usize,
+    pub errors: usize,
+}
+
+impl SummaryCounts {
+    pub fn from_results(results: &[ItemResult]) -> Self {
+        let mut c = Self::default();
+        for r in results {
+            // Lyrics evaluated = source is Lyrics, excluding no-lyrics skips.
+            // No-lyrics items have source=Lyrics, tier=None, action=Skipped.
+            let is_lyrics = r.source == Source::Lyrics;
+            let is_no_lyrics_skip =
+                is_lyrics && r.tier.is_none() && matches!(r.action, RatingAction::Skipped);
+            if is_lyrics && !is_no_lyrics_skip {
+                c.lyrics_evaluated += 1;
+            }
+            // Tier counts
+            match r.tier.as_deref() {
+                Some("R") => c.r_rated += 1,
+                Some("PG-13") => c.pg13 += 1,
+                _ => {}
+            }
+            // Clean = had lyrics but no explicit content (not a no-lyrics skip)
+            if is_lyrics && r.tier.is_none() && !is_no_lyrics_skip {
+                c.clean += 1;
+            }
+            // Action counts by source
+            match (&r.action, &r.source) {
+                (RatingAction::Set, Source::Genre) => c.g_genre_set += 1,
+                (RatingAction::Set, _) => c.ratings_set += 1,
+                (RatingAction::AlreadyCorrect, Source::Genre) => c.g_genre_already += 1,
+                (RatingAction::AlreadyCorrect, _) => c.already_correct += 1,
+                (RatingAction::Cleared, _) => c.cleared += 1,
+                (RatingAction::DryRun, Source::Genre) => c.g_genre_dry += 1,
+                (RatingAction::DryRun, _) => c.dry_run += 1,
+                (RatingAction::DryRunClear, _) => c.dry_run += 1,
+                (RatingAction::Skipped, _) => c.skipped += 1,
+                (RatingAction::Error(_), _) => c.errors += 1,
+            }
+        }
+        c
+    }
+}
+
+/// Print summary counts to stdout.
+pub fn print_summary(results: &[ItemResult], label: &str) {
+    let c = SummaryCounts::from_results(results);
+    if !label.is_empty() {
+        println!("\n=== {} ===", label);
+    }
+    println!();
+    println!("=== Rating Summary ===");
+    if c.lyrics_evaluated > 0 {
+        println!("  Lyrics evaluated:    {}", c.lyrics_evaluated);
+        println!("    R-rated:           {}", c.r_rated);
+        println!("    PG-13:             {}", c.pg13);
+        println!("    Clean:             {}", c.clean);
+    }
+    println!("  Ratings set:         {}", c.ratings_set);
+    println!("  Already correct:     {}", c.already_correct);
+    println!("  Ratings cleared:     {}", c.cleared);
+    if c.g_genre_set > 0 || c.g_genre_already > 0 || c.g_genre_dry > 0 {
+        println!("  G (genre-matched):   {}", c.g_genre_set);
+        println!("  Already G (genre):   {}", c.g_genre_already);
+        if c.g_genre_dry > 0 {
+            println!("  Dry-run G (genre):   {}", c.g_genre_dry);
+        }
+    }
+    if c.skipped > 0 {
+        println!("  Skipped:             {}", c.skipped);
+    }
+    if c.dry_run > 0 {
+        println!("  Dry-run would act:   {}", c.dry_run);
+    }
+    println!("  Errors:              {}", c.errors);
 }

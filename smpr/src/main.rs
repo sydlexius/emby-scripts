@@ -174,6 +174,100 @@ fn load_config(
     })
 }
 
+/// Which workflow to run (avoids passing &Commands through the borrow checker).
+enum Workflow {
+    Rate,
+    Force(String), // target_rating
+    Reset,
+}
+
+fn run_workflows(cfg: &config::Config, workflow: &Workflow) {
+    let multi = cfg.servers.len() > 1;
+    let mut all_results: Vec<rating::ItemResult> = Vec::new();
+    let mut had_failure = false;
+
+    for server_config in &cfg.servers {
+        let label = if multi {
+            format!(
+                "{} ({})",
+                server_config.name,
+                server_config
+                    .server_type
+                    .as_ref()
+                    .map(|t| format!("{t:?}"))
+                    .unwrap_or_else(|| "auto".into())
+            )
+        } else {
+            String::new()
+        };
+        if multi {
+            eprintln!("--- Processing {} ---", label);
+        }
+
+        let server_type = match server_config.server_type.clone() {
+            Some(t) => t,
+            None => match server::detect_server_type(&server_config.url) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!(
+                        "Error: failed to detect server type for '{}': {e}",
+                        server_config.name
+                    );
+                    had_failure = true;
+                    continue;
+                }
+            },
+        };
+
+        let client = server::MediaServerClient::new(
+            server_config.url.clone(),
+            server_config.api_key.clone(),
+            server_type,
+        );
+
+        let results = match workflow {
+            Workflow::Rate => {
+                let engine = detection::DetectionEngine::new(&cfg.detection);
+                rating::rate_workflow(&client, cfg, server_config, &engine)
+            }
+            Workflow::Force(target_rating) => {
+                rating::force_workflow(&client, cfg, server_config, target_rating)
+            }
+            Workflow::Reset => rating::reset_workflow(&client, cfg, server_config),
+        };
+
+        match results {
+            Ok(results) => {
+                if multi {
+                    rating::print_summary(&results, &label);
+                }
+                all_results.extend(results);
+            }
+            Err(e) => {
+                eprintln!(
+                    "Error: {} failed: {e}",
+                    if label.is_empty() { "Server" } else { &label }
+                );
+                had_failure = true;
+            }
+        }
+    }
+
+    // Write report
+    if let Some(ref report_path) = cfg.report_path {
+        report::write_report(&all_results, report_path);
+    }
+
+    // Print summary (single server, or overall for multi)
+    if !multi {
+        rating::print_summary(&all_results, "");
+    }
+
+    if had_failure {
+        process::exit(1);
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -202,31 +296,7 @@ fn main() {
             ignore_forced,
         } => {
             let cfg = load_config(&common, overwrite.resolve(), ignore_forced);
-            let engine = detection::DetectionEngine::new(&cfg.detection);
-            let server_config = &cfg.servers[0];
-            let server_type = server_config.server_type.clone().unwrap_or_else(|| {
-                server::detect_server_type(&server_config.url).unwrap_or_else(|e| {
-                    eprintln!(
-                        "Error: failed to detect server type for '{}': {e}",
-                        server_config.name
-                    );
-                    process::exit(1);
-                })
-            });
-            let client = server::MediaServerClient::new(
-                server_config.url.clone(),
-                server_config.api_key.clone(),
-                server_type,
-            );
-            match rating::rate_workflow(&client, &cfg, server_config, &engine) {
-                Ok(results) => {
-                    eprintln!("Processed {} items", results.len());
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    process::exit(1);
-                }
-            }
+            run_workflows(&cfg, &Workflow::Rate);
         }
         Commands::Force {
             rating: target_rating,
@@ -234,57 +304,11 @@ fn main() {
             overwrite,
         } => {
             let cfg = load_config(&common, overwrite.resolve(), false);
-            let server_config = &cfg.servers[0];
-            let server_type = server_config.server_type.clone().unwrap_or_else(|| {
-                server::detect_server_type(&server_config.url).unwrap_or_else(|e| {
-                    eprintln!(
-                        "Error: failed to detect server type for '{}': {e}",
-                        server_config.name
-                    );
-                    process::exit(1);
-                })
-            });
-            let client = server::MediaServerClient::new(
-                server_config.url.clone(),
-                server_config.api_key.clone(),
-                server_type,
-            );
-            match rating::force_workflow(&client, &cfg, server_config, &target_rating) {
-                Ok(results) => {
-                    eprintln!("Force-rated {} items", results.len());
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    process::exit(1);
-                }
-            }
+            run_workflows(&cfg, &Workflow::Force(target_rating));
         }
         Commands::Reset { common } => {
             let cfg = load_config(&common, None, false);
-            let server_config = &cfg.servers[0];
-            let server_type = server_config.server_type.clone().unwrap_or_else(|| {
-                server::detect_server_type(&server_config.url).unwrap_or_else(|e| {
-                    eprintln!(
-                        "Error: failed to detect server type for '{}': {e}",
-                        server_config.name
-                    );
-                    process::exit(1);
-                })
-            });
-            let client = server::MediaServerClient::new(
-                server_config.url.clone(),
-                server_config.api_key.clone(),
-                server_type,
-            );
-            match rating::reset_workflow(&client, &cfg, server_config) {
-                Ok(results) => {
-                    eprintln!("Reset {} items", results.len());
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    process::exit(1);
-                }
-            }
+            run_workflows(&cfg, &Workflow::Reset);
         }
         Commands::Configure { .. } => {
             eprintln!("configure: not yet implemented");

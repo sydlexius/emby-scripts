@@ -376,3 +376,106 @@ fn report_csv_output() {
     assert!(lines[2].contains("clean.flac"));
     assert!(lines[2].contains("skipped"));
 }
+
+#[test]
+fn summary_counts_actions() {
+    let results = vec![
+        ItemResult {
+            item_id: "1".into(),
+            path: None,
+            artist: None,
+            album: None,
+            tier: Some("R".into()),
+            matched_words: vec!["fuck".into()],
+            previous_rating: None,
+            action: RatingAction::Set,
+            source: Source::Lyrics,
+            server_name: "s".into(),
+        },
+        ItemResult {
+            item_id: "2".into(),
+            path: None,
+            artist: None,
+            album: None,
+            tier: Some("PG-13".into()),
+            matched_words: vec!["bitch".into()],
+            previous_rating: None,
+            action: RatingAction::DryRun,
+            source: Source::Lyrics,
+            server_name: "s".into(),
+        },
+        ItemResult {
+            item_id: "3".into(),
+            path: None,
+            artist: None,
+            album: None,
+            tier: Some("G".into()),
+            matched_words: vec!["Classical".into()],
+            previous_rating: None,
+            action: RatingAction::Set,
+            source: Source::Genre,
+            server_name: "s".into(),
+        },
+        ItemResult {
+            item_id: "4".into(),
+            path: None,
+            artist: None,
+            album: None,
+            tier: None,
+            matched_words: vec![],
+            previous_rating: Some("R".into()),
+            action: RatingAction::Cleared,
+            source: Source::Lyrics,
+            server_name: "s".into(),
+        },
+        ItemResult {
+            item_id: "5".into(),
+            path: None,
+            artist: None,
+            album: None,
+            tier: Some("R".into()),
+            matched_words: vec![],
+            previous_rating: Some("R".into()),
+            action: RatingAction::AlreadyCorrect,
+            source: Source::Lyrics,
+            server_name: "s".into(),
+        },
+        ItemResult {
+            item_id: "6".into(),
+            path: None,
+            artist: None,
+            album: None,
+            tier: None,
+            matched_words: vec![],
+            previous_rating: None,
+            action: RatingAction::Skipped,
+            source: Source::Lyrics,
+            server_name: "s".into(),
+        },
+        ItemResult {
+            item_id: "7".into(),
+            path: None,
+            artist: None,
+            album: None,
+            tier: Some("G".into()),
+            matched_words: vec!["Ambient".into()],
+            previous_rating: Some("G".into()),
+            action: RatingAction::AlreadyCorrect,
+            source: Source::Genre,
+            server_name: "s".into(),
+        },
+    ];
+    let counts = SummaryCounts::from_results(&results);
+    assert_eq!(counts.lyrics_evaluated, 4); // source=Lyrics, excluding no-lyrics skip (#6)
+    assert_eq!(counts.r_rated, 2); // tier=R
+    assert_eq!(counts.pg13, 1); // tier=PG-13
+    assert_eq!(counts.clean, 1); // source=Lyrics, tier=None, not a no-lyrics skip (#4)
+    assert_eq!(counts.ratings_set, 1); // action=Set, source=Lyrics
+    assert_eq!(counts.already_correct, 1); // action=AlreadyCorrect, source=Lyrics
+    assert_eq!(counts.cleared, 1);
+    assert_eq!(counts.g_genre_set, 1); // action=Set, source=Genre
+    assert_eq!(counts.g_genre_already, 1); // action=AlreadyCorrect, source=Genre
+    assert_eq!(counts.dry_run, 1);
+    assert_eq!(counts.skipped, 1);
+    assert_eq!(counts.errors, 0);
+}
