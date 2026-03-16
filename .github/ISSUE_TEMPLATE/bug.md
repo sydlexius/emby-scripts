@@ -24,7 +24,7 @@ labels: bug
 
 ## Environment
 
-- Python version:
+- smpr version: <!-- run: smpr --version -->
 - Emby version:
 - OS:
 
