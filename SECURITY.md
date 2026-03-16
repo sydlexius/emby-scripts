@@ -31,4 +31,4 @@ This project interacts with Emby and Jellyfin media server APIs using API keys. 
 - API keys are loaded from `.env` files (gitignored) or environment variables
 - `.env.example` contains no real credentials
 - Dependabot alerts and automated security fixes are enabled
-- CodeQL analysis runs on every push to main
+- Built with Rust to reduce memory-safety risks
