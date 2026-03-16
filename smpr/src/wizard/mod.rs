@@ -84,9 +84,12 @@ pub fn resolve_config_dir(cli_config: Option<&str>) -> PathBuf {
         .ok()
         .map(|d| d.join("explicit_config.toml"));
     if let Some(ref p) = cwd_config
-        && p.exists()
+        && p.is_file()
     {
-        return p.parent().unwrap().to_path_buf();
+        return p
+            .parent()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
     }
 
     dirs::config_dir()

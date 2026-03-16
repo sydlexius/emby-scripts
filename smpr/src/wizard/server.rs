@@ -49,7 +49,8 @@ fn validate_url(input: &str) -> Result<String, String> {
         .strip_prefix("http://")
         .or_else(|| lower.strip_prefix("https://"))
     {
-        if rest.is_empty() || rest == "/" {
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+        if authority.is_empty() || authority.starts_with(':') {
             return Err("URL must include a hostname after the scheme".to_string());
         }
         Ok(trimmed.to_string())
