@@ -497,9 +497,13 @@ fn overwrite_default_when_toml_omits() {
 }
 
 #[test]
-fn missing_toml_file_uses_defaults() {
+fn empty_toml_uses_defaults() {
+    // Use an empty TOML to ensure defaults, not platform auto-discovery
+    let dir = tempfile::tempdir().unwrap();
+    let empty_config = dir.path().join("empty.toml");
+    std::fs::write(&empty_config, "").unwrap();
     let cli = CliInput {
-        config_path: None,
+        config_path: Some(empty_config),
         server_url: Some("http://localhost:8096".to_string()),
         api_key: Some("key".to_string()),
         ..Default::default()
@@ -695,4 +699,66 @@ fn config_error_source_none_for_others() {
         std::error::Error::source(&err).is_none(),
         "NoServers should return None"
     );
+}
+
+#[test]
+fn raw_config_serialize_roundtrip() {
+    let toml_str = r#"
+[servers.test-server]
+url = "http://localhost:8096"
+type = "emby"
+
+[detection.r]
+stems = ["fuck"]
+exact = ["blowjob"]
+
+[detection.g_genres]
+genres = ["Classical", "Ambient"]
+
+[general]
+overwrite = false
+"#;
+    let parsed: super::RawConfig = toml::from_str(toml_str).unwrap();
+    let serialized = toml::to_string_pretty(&parsed).unwrap();
+    let reparsed: super::RawConfig = toml::from_str(&serialized).unwrap();
+
+    // Verify key fields survived the round-trip
+    let servers = reparsed.servers.unwrap();
+    assert!(servers.contains_key("test-server"));
+    let srv = &servers["test-server"];
+    assert_eq!(srv.url.as_deref(), Some("http://localhost:8096"));
+    assert_eq!(srv.server_type.as_deref(), Some("emby"));
+
+    let det = reparsed.detection.unwrap();
+    let r = det.r.unwrap();
+    assert_eq!(r.stems.unwrap(), vec!["fuck"]);
+
+    let genres = det.g_genres.unwrap();
+    assert_eq!(genres.genres.unwrap(), vec!["Classical", "Ambient"]);
+
+    assert_eq!(reparsed.general.unwrap().overwrite, Some(false));
+}
+
+#[test]
+fn resolve_discovers_cwd_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("explicit_config.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[servers.test]
+url = "http://localhost:8096"
+"#,
+    )
+    .unwrap();
+
+    let resolved = super::resolve_default_config_path_from(dir.path());
+    assert_eq!(resolved, Some(config_path));
+}
+
+#[test]
+fn resolve_returns_none_when_no_config_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let resolved = super::resolve_default_config_path_from(dir.path());
+    assert!(resolved.is_none());
 }

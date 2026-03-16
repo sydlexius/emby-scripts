@@ -2,15 +2,15 @@
 // server, detection, rating, and report modules as they're implemented.
 #![allow(dead_code)]
 
-mod defaults;
+pub mod defaults;
 #[cfg(test)]
 mod tests;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct RawConfig {
     pub servers: Option<BTreeMap<String, RawServerConfig>>,
     pub detection: Option<RawDetection>,
@@ -18,7 +18,7 @@ pub struct RawConfig {
     pub report: Option<RawReport>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawServerConfig {
     pub url: Option<String>,
     #[serde(rename = "type")]
@@ -26,18 +26,18 @@ pub struct RawServerConfig {
     pub libraries: Option<BTreeMap<String, RawLibraryConfig>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawLibraryConfig {
     pub force_rating: Option<String>,
     pub locations: Option<BTreeMap<String, RawLocationConfig>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawLocationConfig {
     pub force_rating: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct RawDetection {
     pub r: Option<RawWordList>,
     pub pg13: Option<RawWordList>,
@@ -45,28 +45,28 @@ pub struct RawDetection {
     pub g_genres: Option<RawGenres>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawWordList {
     pub stems: Option<Vec<String>>,
     pub exact: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawIgnore {
     pub false_positives: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawGenres {
     pub genres: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawGeneral {
     pub overwrite: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RawReport {
     pub output_path: Option<String>,
 }
@@ -219,37 +219,128 @@ pub struct CliInput {
     pub ignore_forced: bool,
 }
 
+// ── Config path auto-discovery ─────────────────────────────────────
+
+/// Resolve the default config file path when --config is not specified.
+/// Checks CWD for explicit_config.toml, then platform config dir.
+pub fn resolve_default_config_path() -> Option<PathBuf> {
+    // 1. Check CWD for explicit_config.toml
+    if let Some(path) = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| resolve_default_config_path_from(&cwd))
+    {
+        return Some(path);
+    }
+
+    // 2. Check platform config dir
+    let platform_config = dirs::config_dir()?.join("smpr").join("config.toml");
+    if platform_config.is_file() {
+        return Some(platform_config);
+    }
+
+    None
+}
+
+/// Testable version that takes CWD as a parameter.
+/// Only checks CWD — does not check the platform config dir.
+/// Use `resolve_default_config_path()` for the full resolution chain.
+pub fn resolve_default_config_path_from(cwd: &std::path::Path) -> Option<PathBuf> {
+    let cwd_config = cwd.join("explicit_config.toml");
+    if cwd_config.is_file() {
+        return Some(cwd_config);
+    }
+    None
+}
+
+/// Resolve the default .env file path when --env-file is not specified.
+/// Checks same directory as resolved config file first, then CWD.
+pub fn resolve_default_env_path(config_path: Option<&std::path::Path>) -> Option<PathBuf> {
+    // 1. Check same directory as resolved config file
+    if let Some(config) = config_path
+        && let Some(parent) = config.parent()
+    {
+        let env_path = parent.join(".env");
+        if env_path.is_file() {
+            return Some(env_path);
+        }
+    }
+
+    // 2. Fallback to CWD
+    if let Ok(cwd) = std::env::current_dir() {
+        let cwd_env = cwd.join(".env");
+        if cwd_env.is_file() {
+            return Some(cwd_env);
+        }
+    }
+
+    None
+}
+
 // ── Config loading ─────────────────────────────────────────────────
 
 impl Config {
     /// Build a fully resolved `Config` from TOML file, .env file, and CLI flags.
     pub fn load_from_paths(cli: &CliInput) -> Result<Config, ConfigError> {
-        // 1. Parse TOML
-        let raw = match &cli.config_path {
-            Some(path) => {
+        // 1. Resolve config path
+        let resolved_config_path = cli.config_path.clone().or_else(resolve_default_config_path);
+
+        // 2. Parse TOML
+        let raw = match &resolved_config_path {
+            Some(path) if cli.config_path.is_some() => {
                 // User explicitly specified --config; missing file is an error
                 let content = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
                 parse_toml(&content).map_err(ConfigError::TomlParse)?
             }
-            None => {
-                // No --config provided; use empty defaults
-                RawConfig::default()
+            Some(path) => {
+                // Auto-discovered config — best-effort in one-off mode
+                log::debug!("Auto-discovered config at {}", path.display());
+                let oneoff = cli.server_url.is_some() && cli.api_key.is_some();
+                match std::fs::read_to_string(path) {
+                    Ok(content) => match parse_toml(&content) {
+                        Ok(raw) => raw,
+                        Err(e) if oneoff => {
+                            log::warn!(
+                                "Ignoring malformed auto-discovered config in one-off mode ({}): {e}",
+                                path.display()
+                            );
+                            RawConfig::default()
+                        }
+                        Err(e) => return Err(ConfigError::TomlParse(e)),
+                    },
+                    Err(e) if oneoff => {
+                        log::warn!(
+                            "Ignoring unreadable auto-discovered config in one-off mode ({}): {e}",
+                            path.display()
+                        );
+                        RawConfig::default()
+                    }
+                    Err(e) => return Err(ConfigError::Io(e)),
+                }
             }
+            None => RawConfig::default(),
         };
 
-        // 2. Load .env file (explicit path must succeed)
+        // 3. Load .env file (explicit path must succeed)
         if let Some(env_path) = &cli.env_file {
             dotenvy::from_path(env_path)
                 .map_err(|e| ConfigError::EnvFile(format!("{}: {e}", env_path.display())))?;
+        } else if let Some(env_path) = resolve_default_env_path(resolved_config_path.as_deref()) {
+            log::debug!("Auto-discovered .env at {}", env_path.display());
+            if let Err(e) = dotenvy::from_path(&env_path) {
+                log::warn!(
+                    "Failed to load auto-discovered .env at {}: {e}",
+                    env_path.display()
+                );
+            }
         }
 
-        // 3. Resolve servers
+        // 4. Resolve servers
         let servers = resolve_servers(&raw, cli)?;
 
-        // 4. Resolve detection
+        // 5. Resolve detection
         let detection = resolve_detection(&raw);
 
-        // 5. Resolve overwrite: CLI > TOML > default (true)
+        // 6. Resolve overwrite: CLI > TOML > default (true)
         let overwrite = cli.overwrite.unwrap_or_else(|| {
             raw.general
                 .as_ref()
@@ -257,7 +348,7 @@ impl Config {
                 .unwrap_or(true)
         });
 
-        // 6. Resolve report path: CLI > TOML > None
+        // 7. Resolve report path: CLI > TOML > None
         let report_path = cli.report.as_ref().map(PathBuf::from).or_else(|| {
             raw.report
                 .as_ref()
