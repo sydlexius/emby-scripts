@@ -4,9 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Standalone Python utilities for managing an Emby or Jellyfin media server. Each script lives in its own subdirectory with its own README and TOML config. Shared server credentials (`.env`, `.env.prod`) live in the repo root.
-
-Currently contains one script: `SetMusicParentalRating/SetMusicParentalRating.py` — fetches lyrics from the Emby or Jellyfin API, detects explicit content using tiered word detection (R / PG-13), and sets `OfficialRating` on matching audio tracks.
+Rust CLI (`smpr`) for Emby/Jellyfin parental rating management. Fetches lyrics from the Emby or Jellyfin API, detects explicit content using tiered word detection (R / PG-13), and sets `OfficialRating` on matching audio tracks.
 
 ## Repository Layout
 
@@ -14,120 +12,208 @@ Currently contains one script: `SetMusicParentalRating/SetMusicParentalRating.py
 /
 ├── .env / .env.prod          # shared credentials (gitignored)
 ├── .env.example              # credentials template (committed)
-├── README.md                 # repo index
-└── SetMusicParentalRating/
-    ├── SetMusicParentalRating.py
-    ├── README.md
-    ├── explicit_config.example.toml   # committed template
-    ├── explicit_config.toml           # gitignored (copy of example)
-    ├── explicit_config.uat.toml       # gitignored
-    ├── explicit_config.prod.toml      # gitignored
-    └── tests/                         # not yet present; CI skips if absent
+├── README.md
+├── SECURITY.md
+└── smpr/                     # Rust project
+    ├── Cargo.toml
+    └── src/
+        ├── main.rs           # CLI (clap): rate, force, reset, configure
+        ├── config/           # Config struct, TOML/.env loading, defaults
+        │   ├── mod.rs        # RawConfig/Config types, CliInput, load_from_paths, server/detection resolution
+        │   ├── defaults.rs   # Built-in R/PG-13 word lists and false positives
+        │   └── tests.rs      # Config loading tests
+        ├── detection.rs      # DetectionEngine: classify_lyrics, detect_stems, detect_exact, match_g_genre
+        ├── rating/           # Workflow orchestration
+        │   ├── mod.rs        # rate_workflow, force_workflow, reset_workflow, print_summary
+        │   ├── action.rs     # decide_rating_action, decide_clear_action, apply_rating (GET+POST round-trip)
+        │   ├── scope.rs      # resolve_from_libraries, filter_by_location, lookup_force_rating
+        │   └── tests.rs      # Scope and action unit tests
+        ├── report.rs         # CSV report writer (csv crate)
+        ├── server/           # HTTP client and API abstractions
+        │   ├── mod.rs        # MediaServerClient, detect_server_type, fetch_lyrics, prefetch_audio_items
+        │   ├── types.rs      # Typed API response structs (SystemInfoPublic, VirtualFolder, AudioItemView, etc.)
+        │   ├── error.rs      # MediaServerError enum (Http, Connection, Parse, Protocol)
+        │   └── tests.rs      # Server detection and lyrics extraction tests
+        ├── tui/              # ratatui-based TUI (reserved for future use; mod.rs only)
+        ├── util.rs           # strip_lrc_tags (LRC timestamp/metadata removal)
+        └── wizard/           # inquire-based interactive configure wizard
+            ├── mod.rs        # run_wizard entry point, config dir resolution
+            ├── server.rs     # Server URL + type detection prompts
+            ├── auth.rs       # API key or username/password authentication
+            ├── library.rs    # Library discovery + genre allow-list selection
+            ├── detection.rs  # Custom word-list additions prompts
+            ├── preferences.rs # Overwrite behavior preference
+            └── output.rs     # TOML config + .env file writer
 ```
 
 ## Commands
 
-### Run the script
 ```bash
-# Run from the repo root:
+# Lint & format
+cd smpr
+cargo fmt -- --check
+cargo clippy -- -D warnings
 
-# Dry run — evaluate lyrics, report but don't update server
-python3 SetMusicParentalRating/SetMusicParentalRating.py rate --library Music --dry-run --report report.csv
+# Tests (sequential: config tests mutate process-global env vars)
+cargo test --verbose -- --test-threads=1
 
-# Scope to a specific library or location
-python3 SetMusicParentalRating/SetMusicParentalRating.py rate --library Music --dry-run
-python3 SetMusicParentalRating/SetMusicParentalRating.py rate --location classical --dry-run
-
-# Target a specific named server
-python3 SetMusicParentalRating/SetMusicParentalRating.py rate --server home-jellyfin --library Music --dry-run
-
-# Force-rate a library as G (no lyrics evaluation)
-python3 SetMusicParentalRating/SetMusicParentalRating.py force G --library "Classical Music"
-
-# Remove all ratings from a library
-python3 SetMusicParentalRating/SetMusicParentalRating.py reset --library Music --dry-run
-
-# Skip tracks that already have a rating
-python3 SetMusicParentalRating/SetMusicParentalRating.py rate --library Music --skip-existing --dry-run
-
-# One-off server (no TOML config needed)
-python3 SetMusicParentalRating/SetMusicParentalRating.py rate --server-url http://localhost:8096 --api-key YOUR_KEY --library Music --dry-run
-
-# Production server
-python3 SetMusicParentalRating/SetMusicParentalRating.py rate --env-file .env.prod --config SetMusicParentalRating/explicit_config.prod.toml --dry-run
+# Build
+cargo build --release
 ```
 
-### Lint & Format
-```bash
-ruff check .          # lint (run from repo root)
-ruff check --fix .
-ruff format .
-ruff format --check . # CI uses this
-```
-
-### Tests
-```bash
-cd SetMusicParentalRating
-python3 -m pytest tests/ -v --tb=short              # run all tests (if tests/ exists)
-python3 -m pytest tests/test_foo.py::test_name -v   # run a single test
-python3 -c "import SetMusicParentalRating"           # verify imports (CI smoke test)
-```
-
-### Pre-commit
-```bash
-pre-commit run --all-files
-```
+Always run `cargo fmt` before committing. Pre-commit hooks do not run in subagent contexts, so format manually.
 
 ## Architecture
 
-`SetMusicParentalRating.py` is a single-file script with no external dependencies — pure stdlib Python 3.11+.
+### CLI (main.rs)
 
-### Key data flow
-1. **CLI** (`build_parser`): three subcommands — `rate`, `force`, `reset` — with a shared parent parser for common options (`--config`, `--env-file`, `--server`, `--server-url`, `--api-key`, `--library`, `--location`, `-v`). **Config merge** (`build_config`): CLI flags > `os.environ` > `.env` file > `explicit_config.toml` > hardcoded defaults. **Server resolution** (`_resolve_servers`): `--server-url`+`--api-key` (one-off) > TOML `[servers.*]` sections. Server type (Emby/Jellyfin) is auto-detected via `GET /System/Info/Public`. `Config.__post_init__` precompiles exact-match regexes.
-2. **Library scoping** (`_resolve_library_scope`): `GET /Library/VirtualFolders` discovers music libraries. `--library NAME` scopes by `ParentId`. `--location NAME` adds post-prefetch path filtering via `_filter_by_location`. Without flags, processes all audio items.
-3. **Lyrics fetch** (`fetch_lyrics`): Emby: tries external subtitle streams (`GET /Videos/{id}/{msid}/Subtitles/{idx}/Stream.txt`), falls back to embedded `Extradata`. Jellyfin: `GET /Audio/{id}/Lyrics`. Returns plain text (LRC-stripped) or `None`.
-4. **Detection** (`classify_lyrics`): two-tier word detection — stem matching (substring with false-positive filter) and exact matching (word-boundary regex). R tier takes priority over PG-13.
-5. **Rating** (`process_library`): single-pass over prefetched items. For each: fetch lyrics → classify → set/skip rating. Items without lyrics fall through to genre allow-list check (`match_g_genre`). `--overwrite` (default) re-evaluates all tracks and clears ratings from clean tracks. `--skip-existing` skips tracks with any rating.
-6. **Force rating** (`force_rate_library`): sets a fixed rating on all tracks in scope without lyrics evaluation. Respects `--overwrite`/`--skip-existing`.
-7. **Reset** (`reset_library`): removes `OfficialRating` from all tracks in scope.
-8. Each track produces one `DetectionResult`. `source`: `"lyrics"` | `"genre"` | `"force"` | `"reset"`. `action`: `set | cleared | skipped | already_correct | not_found_in_server | error | dry_run | dry_run_clear | g_genre | g_genre_already_correct | dry_run_g_genre`.
+Clap-derived parser with four subcommands:
 
-### API pattern (Emby and Jellyfin)
-- Auth: `X-Emby-Token` header (Emby) or `X-MediaBrowser-Token` header (Jellyfin)
-- Server type detection: `GET /System/Info/Public` (unauthenticated) — `ProductName == "Jellyfin Server"` → Jellyfin; fallback: `Server` header
-- Library discovery: `GET /Library/VirtualFolders` — returns `Name`, `ItemId`, `CollectionType`, `Locations[]`
-- Bulk audio listing: `GET /Users/{userId}/Items?Recursive=true&IncludeItemTypes=Audio&Fields=Path,OfficialRating,AlbumArtist,Album,Genres` (paginated at 500; `MediaSources` appended when lyrics fetch needs stream info; `&ParentId={id}` for library scoping)
-- Item reads are user-scoped: `GET /Users/{userId}/Items/{id}` (not `GET /Items/{id}` which returns 404)
-- Item updates require the full item body: `POST /Items/{id}` with the complete JSON from the GET
-- Genre listing: `GET /MusicGenres?Recursive=true`
+- **`rate`** — fetch lyrics, classify content, set ratings. Flags: `--library`, `--location`, `--server`, `--dry-run`, `--report`, `--overwrite`/`--skip-existing`, `--ignore-forced`, plus config/env flags.
+- **`force <RATING>`** — set a fixed rating on all tracks in scope without lyrics evaluation. Same scoping and overwrite flags as `rate`.
+- **`reset`** — remove `OfficialRating` from all tracks in scope.
+- **`configure`** — launch the interactive setup wizard.
 
-### Thread safety
-The script is single-threaded. `process_library` uses shared mutable state
-(`handled_paths: set`, `results: list`) that is not thread-safe. If parallelism
-is ever added, these would need locking or per-thread accumulation.
+`CommonOpts` holds shared flags for rate/force/reset. `OverwriteOpts` resolves `--overwrite`/`--skip-existing` to `Option<bool>`. `build_cli_input()` converts clap structs to `config::CliInput` (decouples config module from clap).
 
-### Named server model
+`run_workflows()` iterates over resolved servers, auto-detects server type if needed, creates a `MediaServerClient`, dispatches to the appropriate workflow, collects results, writes the CSV report, and prints the summary.
+
+### Config merge (config/mod.rs)
+
+`Config::load_from_paths(&CliInput)` is the single entry point. Resolution order:
+
+1. **Config path**: `--config` flag > CWD `explicit_config.toml` > `~/.config/smpr/config.toml` (platform config dir)
+2. **TOML parse**: explicit `--config` path must exist; auto-discovered paths are best-effort (ignored in one-off mode if unreadable)
+3. **.env file**: `--env-file` flag > same dir as resolved config > CWD `.env`. Uses `dotenvy::from_path`.
+4. **Server resolution** (`resolve_servers`): `--server-url`+`--api-key` (one-off) > TOML `[servers.*]` sections. API keys from env vars as `{LABEL_UPPER}_API_KEY` (hyphens replaced with underscores). `--server` flag filters to named servers.
+5. **Detection**: TOML `[detection.r]`, `[detection.pg13]`, `[detection.ignore]`, `[detection.g_genres]` > hardcoded defaults in `config/defaults.rs`.
+6. **Overwrite**: CLI flag > TOML `[general].overwrite` > default `true`.
+7. **Report path**: CLI `--report` > TOML `[report].output_path` > None.
+
+Key types: `RawConfig` (serde TOML shape) vs `Config` (resolved, validated). `CliInput` is a plain struct that decouples config loading from clap.
+
+### Server interaction (server/mod.rs)
+
+`MediaServerClient` wraps a `ureq::Agent` with base URL, API key, and server type. Key methods:
+
+- `request(method, path, body)` — authenticated JSON request; returns `Ok(None)` for empty bodies
+- `request_text(method, path)` — authenticated plain-text request (for Emby subtitle streams)
+- `get_user_id()` — cached `GET /Users` to resolve first user ID (needed for user-scoped endpoints)
+- `get_item(id)` / `update_item(id, body)` — full-body round-trip for rating updates (`GET /Users/{uid}/Items/{id}` then `POST /Items/{id}`)
+- `prefetch_audio_items(include_media_sources, parent_id)` — paginated `GET /Users/{uid}/Items` with page size 500
+- `discover_libraries()` — `GET /Library/VirtualFolders`, filtered to `CollectionType == "music"`
+- `fetch_lyrics(item, raw)` — dispatches to Emby or Jellyfin path
+
+Auth headers: `X-Emby-Token` (Emby) or `X-MediaBrowser-Token` (Jellyfin).
+
+Server type detection (`detect_server_type`): `GET /System/Info/Public` (unauthenticated). Three-tier detection:
+1. `ProductName == "Jellyfin Server"` → Jellyfin; any other ProductName → Emby
+2. Structural: `LocalAddress` (singular) → Jellyfin; `LocalAddresses` (plural) → Emby
+3. `Server` header: "Kestrel" → Jellyfin; other → Emby
+
+Lyrics fetch (Emby): external subtitle streams via `GET /Videos/{id}/{msid}/Subtitles/{idx}/Stream.txt`, fallback to embedded `Extradata`. Lyrics fetch (Jellyfin): `GET /Audio/{id}/Lyrics`, parse structured `LyricsResponse`.
+
+### Detection engine (detection.rs)
+
+`DetectionEngine` is constructed from `DetectionConfig`, pre-lowercasing stems and compiling exact-match regexes.
+
+`classify_lyrics(text)` returns `(Option<tier>, Vec<matched_words>)`:
+1. Tokenize lowercased text with `[a-z']+` regex
+2. **R tier first**: `detect_stems` (substring match with false-positive filter) + `detect_exact` (word-boundary regex `\b{word}\b`)
+3. **PG-13 tier**: same approach, only checked if R tier found nothing
+4. R takes priority — if any R match found, PG-13 is not checked
+5. Results are deduped across stem + exact hits
+
+`match_g_genre(genres)` — returns the first genre that matches the allow-list (case-insensitive). Used as a fallback when no lyrics are found.
+
+### Rating workflows (rating/mod.rs)
+
+All three workflows follow the same pattern: resolve library scope → prefetch items → filter by location → process each item → return `Vec<ItemResult>`.
+
+- **`rate_workflow`**: for each item: check config-level `force_rating` (unless `--ignore-forced`) → fetch lyrics → `classify_lyrics` → set rating or clear if clean. No-lyrics items fall through to genre allow-list check (`match_g_genre → "G"`).
+- **`force_workflow`**: set a fixed rating on all items in scope. No lyrics evaluation.
+- **`reset_workflow`**: clear `OfficialRating` on all items in scope.
+
+**Action decisions** (`rating/action.rs`): `decide_rating_action` and `decide_clear_action` are pure functions — no server calls. `apply_rating` performs the GET+POST round-trip. Auth errors (401/403) abort the entire workflow via `RatingError::Auth`.
+
+**Library scoping** (`rating/scope.rs`): `resolve_from_libraries` resolves `--library` and `--location` flags against `VirtualFolder` data. `filter_by_location` is a post-prefetch path-prefix filter with normalized separators. `lookup_force_rating` resolves config-level force ratings with precedence: location > library.
+
+**Result types**: `ItemResult` captures item metadata, tier, matched words, previous rating, action taken, source (Lyrics/Genre/Force/Reset), and server name. `RatingAction` enum: Set, Cleared, Skipped, AlreadyCorrect, DryRun, DryRunClear, Error.
+
+### Configure wizard (wizard/)
+
+`run_wizard` drives a multi-step interactive flow using `inquire` prompts:
+1. Detect existing config; offer to add a server if one exists
+2. `server.rs` — prompt for server URL, validate connectivity, auto-detect type
+3. `auth.rs` — prompt for API key directly or authenticate via username/password
+4. `library.rs` — discover music libraries, prompt for genre allow-list selection
+5. `detection.rs` — prompt for additional custom word stems/exact words
+6. `preferences.rs` — overwrite behavior preference
+7. `output.rs` — write TOML config + `.env` file
+
+Steps 3-5 are skipped when adding a server to an existing config.
+
+### Report (report.rs)
+
+`write_report` writes a CSV with columns: artist, album, track, tier, matched_words, previous_rating, action, source, server. Creates parent directories if needed. Errors are logged, not fatal.
+
+### Utilities (util.rs)
+
+`strip_lrc_tags` — removes LRC timestamp tags (`[00:15.30]`) and metadata lines (`[ar:Artist Name]`) from lyrics text. Used by both Emby and Jellyfin lyrics paths.
+
+## API Pattern (Emby and Jellyfin)
+
+- **Auth**: `X-Emby-Token` header (Emby) or `X-MediaBrowser-Token` header (Jellyfin)
+- **Server type detection**: `GET /System/Info/Public` (unauthenticated) — `ProductName == "Jellyfin Server"` → Jellyfin; fallback to structural shape and `Server` header
+- **Library discovery**: `GET /Library/VirtualFolders` — returns `Name`, `ItemId`, `CollectionType`, `Locations[]`
+- **Bulk audio listing**: `GET /Users/{userId}/Items?Recursive=true&IncludeItemTypes=Audio&Fields=Path,OfficialRating,AlbumArtist,Album,Genres` (paginated at 500; `MediaSources` appended for Emby lyrics fetch; `&ParentId={id}` for library scoping)
+- **Item reads are user-scoped**: `GET /Users/{userId}/Items/{id}` (not `GET /Items/{id}` which returns 404)
+- **Item updates require the full item body**: `POST /Items/{id}` with the complete JSON from the GET (mutate `OfficialRating` then POST back)
+- **Genre listing**: `GET /MusicGenres?Recursive=true`
+- **Lyrics (Emby)**: `GET /Videos/{id}/{mediaSourceId}/Subtitles/{streamIndex}/Stream.txt` for external streams; embedded lyrics from `Extradata` on internal subtitle streams
+- **Lyrics (Jellyfin)**: `GET /Audio/{id}/Lyrics` — structured JSON response with `Lyrics[].Text`
+- **Authentication** (wizard only): `POST /Users/AuthenticateByName` with `X-Emby-Authorization` header → returns `AccessToken`
+
+## Named Server Model
+
 Servers are defined in TOML `[servers.*]` sections with API keys in `.env` as `{LABEL}_API_KEY` (hyphens → underscores):
 ```toml
 [servers.home-emby]
 url = "http://192.168.1.126:8096"
+# type = "emby"  # optional; auto-detected if omitted
+
+[servers.home-emby.libraries.Music]
+# force_rating = "G"  # optional; force all tracks in this library to G
+
+[servers.home-emby.libraries.Music.locations.Classical]
+# force_rating = "G"  # optional; force tracks in this location to G
 ```
 ```bash
 HOME_EMBY_API_KEY=your-key
 ```
-Server type is auto-detected; override with `type = "emby"` in the TOML section. `--server NAME` selects a specific server. `--server-url` + `--api-key` provides one-off credentials.
+Server type is auto-detected; override with `type = "emby"` or `type = "jellyfin"` in the TOML section. `--server NAME` selects a specific server (repeatable). `--server-url` + `--api-key` provides one-off credentials without any TOML config.
 
-### Configuration
-- API keys go in `.env` at the repo root as `{LABEL}_API_KEY` — never in TOML or committed files
+## Configuration
+
+- API keys go in `.env` at the repo root (or alongside the TOML config) as `{LABEL}_API_KEY` — never in TOML or committed files
 - Use `--env-file .env.prod` to target production credentials
-- Word lists, library path, and genre allow-list go in `explicit_config.toml` (copy from `explicit_config.example.toml`)
-- Only `explicit_config.example.toml` is committed; all other TOML variants are gitignored
+- Word lists, genre allow-list, and library force_rating rules go in `explicit_config.toml` (or `~/.config/smpr/config.toml`)
+- Only `.env.example` is committed; all `.env` variants and TOML configs are gitignored
 - `overwrite` (default `true`): when true, `rate` re-evaluates all tracks including clearing ratings from clean tracks; when false, skips tracks with existing ratings (`--skip-existing`)
+- Precedence: CLI flags > env vars > `.env` file > TOML config > hardcoded defaults
 
 ## CI
 
-GitHub Actions runs on push/PR to `main`:
-- **Lint**: `ruff check .` and `ruff format --check .` (pinned ruff v0.15.5, Python 3.13)
-- **Test**: import verification (`working-directory: SetMusicParentalRating`) + pytest (if `SetMusicParentalRating/tests/` exists)
+GitHub Actions workflows in `.github/workflows/`:
 
-Pre-commit hooks: `check-ast`, `check-yaml`, `end-of-file-fixer`, `trailing-whitespace`, ruff check+format.
+- **ci.yml**: runs on push/PR to `main`
+  - **Lint**: `cargo fmt -- --check` + `cargo clippy -- -D warnings` (Rust 1.94)
+  - **Test**: `cargo test --verbose -- --test-threads=1` (sequential — config tests mutate process-global env vars)
+  - **Build**: `cargo build --release`
+
+- **release.yml**: runs on tag push (`v*`)
+  - **Check**: lint + test gate (ubuntu-only)
+  - **Build**: cross-compile matrix — Linux (musl static), macOS Intel, macOS Apple Silicon, Windows
+  - **Release**: downloads all artifacts, creates GitHub Release with auto-generated notes
+
+Pre-commit hooks: `cargo fmt -- --check` and `cargo clippy -- -D warnings`. Note: subagent commits bypass pre-commit hooks, so always run `cargo fmt` and `cargo clippy` manually before committing.
