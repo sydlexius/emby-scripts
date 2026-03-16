@@ -1,6 +1,3 @@
-// Server module methods are consumed by future milestones (detection, rating).
-#![allow(dead_code, unused_imports)]
-
 pub mod error;
 pub mod types;
 
@@ -45,6 +42,7 @@ impl MediaServerClient {
     }
 
     /// Returns the base URL (trailing slash stripped).
+    #[allow(dead_code)]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -290,6 +288,7 @@ impl MediaServerClient {
     }
 
     /// GET /MusicGenres?Recursive=true — return sorted genre names.
+    #[allow(dead_code)]
     pub fn list_genres(&self) -> Result<Vec<String>, MediaServerError> {
         let result = self
             .request("GET", "/MusicGenres?Recursive=true", None)?
@@ -568,6 +567,7 @@ fn extract_embedded_lyrics(raw: &Value) -> Option<String> {
 /// Authenticate via POST /Users/AuthenticateByName.
 /// Standalone function — no client instance needed (called before API key exists).
 /// Returns the AccessToken from the response.
+#[allow(dead_code)]
 pub fn authenticate_by_name(
     url: &str,
     username: &str,
