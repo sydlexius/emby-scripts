@@ -71,9 +71,23 @@ One per track processed (replaces Python's `DetectionResult`):
 
 Differences from Python's `DetectionResult`:
 - No `sidecar_path` (filesystem scanning removed)
-- No `server_type` field (`server_name` is more useful for multi-server reports)
+- No `server_type` field — `server_name` carries the config label (e.g. "home-emby")
+  instead of "emby"/"jellyfin". This is an intentional change: config labels are more
+  useful in multi-server reports. Users with tooling that parses the CSV `server`
+  column should update to expect config labels.
 - `action` and `source` are enums, not strings
 - `path` is the server-reported path (for track name extraction in reports)
+
+**Dropped Python action variants:**
+- `not_found_in_server` — In Rust, `AudioItemView.id` is a required field. Items
+  with missing/empty IDs are filtered out during `prefetch_audio_items` deserialization
+  (the server module logs a warning for parse failures). This is a behavioral change:
+  Python recorded these as results with `action = "not_found_in_server"`, Rust silently
+  skips them during prefetch.
+- `g_genre` / `g_genre_already_correct` / `dry_run_g_genre` — Merged into the
+  standard `Set` / `AlreadyCorrect` / `DryRun` variants. The `Source::Genre` field
+  distinguishes genre-matched items from lyrics-matched items. Summary counters use
+  `(action, source)` pairs to compute genre-specific counts.
 
 ---
 
@@ -85,7 +99,10 @@ All three workflows share the same setup steps, extracted into a common function
 2. **Create API client** (`MediaServerClient`)
 3. **Resolve library/location scope** — call `discover_libraries()`, match
    `--library`/`--location` to a parent ID and optional location path
-4. **Prefetch all audio items** in scope (paginated bulk fetch, scoped by parent ID)
+4. **Prefetch all audio items** in scope (paginated bulk fetch, scoped by parent ID).
+   The `rate` workflow passes `include_media_sources=true` (needed for Emby lyrics
+   discovery via `MediaSources`). The `force` and `reset` workflows pass
+   `include_media_sources=false` (no lyrics needed, smaller payload).
 5. **Filter by location** if `--location` was used (post-prefetch path-prefix filtering)
 6. **Iterate items** — call the workflow-specific per-item logic
 7. **Collect results** into `Vec<ItemResult>`
@@ -103,7 +120,13 @@ Ported from Python's `_resolve_library_scope` and `_filter_by_location`:
 - Neither flag → process all audio items across all music libraries
 - Error if library/location not found (list available options in error message)
 
-### Force rating lookup
+### Force rating lookup (new — not in Python)
+
+**This is new Rust behavior.** The Python `process_library` does not consult
+per-library/location `force_rating` from TOML config. In Python, `force_rating` is
+only set by the `force` subcommand's CLI argument. The Rust `rate` workflow adds
+automatic force_rating lookup from `ServerConfig.libraries` (defined in the config
+spec's "Force Rating Behavior" section).
 
 During the `rate` workflow, before evaluating lyrics for each item, the scaffolding
 checks `ServerConfig.libraries` for a matching `force_rating`:
@@ -134,18 +157,21 @@ For each audio track in scope:
 3. **Classify lyrics** — run through the detection engine. Gets a tier (R, PG-13,
    or clean) and matched words.
 4. **If explicit (R or PG-13):**
-   - Skip if `--skip-existing` and track already has a rating
-   - Skip if rating already matches the tier
+   - Skip if `config.overwrite` is false (i.e., `--skip-existing`) and track already
+     has a rating
+   - Skip if rating already matches the tier (`AlreadyCorrect`)
    - Otherwise set the rating (or log in dry-run)
-5. **If clean lyrics + overwrite enabled + track has a rating:** Clear the rating
-   (the track was re-evaluated and is now clean)
+5. **If clean lyrics + `config.overwrite` is true + track has a previous rating:**
+   Clear the rating (the track was re-evaluated and is now clean). When
+   `config.overwrite` is false, clean lyrics with an existing rating are `Skipped`.
 6. **If no lyrics at all:** Try genre fallback — if track's genre matches the
    allow-list, set G rating (same skip/overwrite logic)
 
 ### `force` (issue #80)
 
 For each track in scope:
-1. Set the CLI-provided rating (e.g., `smpr force G --library Music`)
+1. Set the CLI-provided rating (the positional `rating` argument from the `Force`
+   subcommand, e.g., `smpr force G --library Music`)
 2. Respects `--skip-existing` (won't overwrite existing ratings)
 3. Skips tracks already at the target rating (`AlreadyCorrect`)
 4. Dry-run support
@@ -238,8 +264,13 @@ Counts displayed:
 | Ratings cleared | Tracks where rating was removed |
 | G (genre-matched) | Tracks rated G via genre allow-list |
 | Already G (genre) | Genre-matched tracks already rated G |
+| Skipped | Tracks skipped (skip-existing or no action needed) |
 | Dry-run would act | Tracks that would be changed in non-dry-run mode |
 | Errors | Tracks where update failed |
+
+Summary counters are computed from `(action, source)` pairs on `ItemResult`. For
+example, "G (genre-matched)" counts items where `action == Set` and
+`source == Genre`. "Lyrics evaluated" counts items where `source == Lyrics`.
 
 Simplified from Python — removes sidecar-era counters.
 
