@@ -8,7 +8,11 @@ pub mod scope;
 #[cfg(test)]
 mod tests;
 
-use crate::server::MediaServerError;
+use crate::config::{Config, ServerConfig, ServerType};
+use crate::detection::DetectionEngine;
+use crate::server::types::AudioItemView;
+use crate::server::{MediaServerClient, MediaServerError};
+use serde_json::Value;
 
 /// Outcome of processing a single track.
 #[derive(Debug, Clone, PartialEq)]
@@ -158,4 +162,202 @@ impl From<MediaServerError> for RatingError {
             _ => Self::Server(e),
         }
     }
+}
+
+/// Run the `rate` workflow for a single server.
+///
+/// Fetches lyrics, classifies content, and sets ratings.
+/// Returns results for all items processed.
+pub fn rate_workflow(
+    client: &MediaServerClient,
+    config: &Config,
+    server_config: &ServerConfig,
+    engine: &DetectionEngine,
+) -> Result<Vec<ItemResult>, RatingError> {
+    let lib_scope = resolve_library_scope(client, config)?;
+    let include_media_sources = client.server_type() == &ServerType::Emby;
+    let items =
+        client.prefetch_audio_items(include_media_sources, lib_scope.parent_id.as_deref())?;
+    let items = if let Some(ref loc_path) = lib_scope.location_path {
+        scope::filter_by_location(items, loc_path)
+    } else {
+        items
+    };
+
+    log::info!("processing {} items for rate workflow", items.len());
+
+    // Check for config-level force_rating (unless --ignore-forced)
+    let force_rating = if config.ignore_forced {
+        None
+    } else {
+        scope::lookup_force_rating(
+            server_config,
+            lib_scope.library_name.as_deref(),
+            config.location_name.as_deref(),
+        )
+    };
+
+    let mut results = Vec::new();
+    for (view, raw) in &items {
+        let result = rate_item(
+            client,
+            config,
+            engine,
+            view,
+            raw,
+            force_rating,
+            &server_config.name,
+        )?;
+        results.push(result);
+    }
+    Ok(results)
+}
+
+fn rate_item(
+    client: &MediaServerClient,
+    config: &Config,
+    engine: &DetectionEngine,
+    view: &AudioItemView,
+    raw: &Value,
+    force_rating: Option<&str>,
+    server_name: &str,
+) -> Result<ItemResult, RatingError> {
+    let label = view.path.as_deref().unwrap_or(&view.id);
+    let prev = view.official_rating.as_deref();
+
+    // Config force_rating takes priority (unless --ignore-forced)
+    if let Some(forced) = force_rating {
+        let act = action::decide_rating_action(forced, prev, config.overwrite, config.dry_run);
+        let act = if matches!(act, RatingAction::Set) {
+            action::apply_rating(client, &view.id, forced, label)
+        } else {
+            act
+        };
+        return Ok(ItemResult {
+            item_id: view.id.clone(),
+            path: view.path.clone(),
+            artist: view.album_artist.clone(),
+            album: view.album.clone(),
+            tier: Some(forced.to_string()),
+            matched_words: vec![],
+            previous_rating: prev.map(String::from),
+            action: act,
+            source: Source::Force,
+            server_name: server_name.to_string(),
+        });
+    }
+
+    // Fetch lyrics
+    let lyrics_text = match client.fetch_lyrics(view, raw) {
+        Ok(text) => text,
+        Err(MediaServerError::Http { status, .. }) if status == 401 || status == 403 => {
+            return Err(RatingError::Auth(status));
+        }
+        Err(e) => {
+            log::warn!("failed to fetch lyrics for {}: {}", label, e);
+            None
+        }
+    };
+
+    if let Some(text) = lyrics_text {
+        let (tier, matched) = engine.classify_lyrics(&text);
+
+        if let Some(tier) = tier {
+            // Explicit content found
+            let act = action::decide_rating_action(tier, prev, config.overwrite, config.dry_run);
+            let act = if matches!(act, RatingAction::Set) {
+                action::apply_rating(client, &view.id, tier, label)
+            } else {
+                act
+            };
+            return Ok(ItemResult {
+                item_id: view.id.clone(),
+                path: view.path.clone(),
+                artist: view.album_artist.clone(),
+                album: view.album.clone(),
+                tier: Some(tier.to_string()),
+                matched_words: matched,
+                previous_rating: prev.map(String::from),
+                action: act,
+                source: Source::Lyrics,
+                server_name: server_name.to_string(),
+            });
+        }
+
+        // Clean lyrics — clear existing rating if overwrite enabled
+        let act = action::decide_clear_action(prev, config.overwrite, config.dry_run);
+        let act = if matches!(act, RatingAction::Cleared) {
+            action::apply_rating(client, &view.id, "", label)
+        } else {
+            act
+        };
+        return Ok(ItemResult {
+            item_id: view.id.clone(),
+            path: view.path.clone(),
+            artist: view.album_artist.clone(),
+            album: view.album.clone(),
+            tier: None,
+            matched_words: vec![],
+            previous_rating: prev.map(String::from),
+            action: act,
+            source: Source::Lyrics,
+            server_name: server_name.to_string(),
+        });
+    }
+
+    // No lyrics — try genre fallback
+    if let Some(matched_genre) = engine.match_g_genre(&view.genres) {
+        let act = action::decide_rating_action("G", prev, config.overwrite, config.dry_run);
+        let act = if matches!(act, RatingAction::Set) {
+            action::apply_rating(client, &view.id, "G", label)
+        } else {
+            act
+        };
+        return Ok(ItemResult {
+            item_id: view.id.clone(),
+            path: view.path.clone(),
+            artist: view.album_artist.clone(),
+            album: view.album.clone(),
+            tier: Some("G".to_string()),
+            matched_words: vec![matched_genre.to_string()],
+            previous_rating: prev.map(String::from),
+            action: act,
+            source: Source::Genre,
+            server_name: server_name.to_string(),
+        });
+    }
+
+    // No lyrics, no genre match — skip
+    Ok(ItemResult {
+        item_id: view.id.clone(),
+        path: view.path.clone(),
+        artist: view.album_artist.clone(),
+        album: view.album.clone(),
+        tier: None,
+        matched_words: vec![],
+        previous_rating: prev.map(String::from),
+        action: RatingAction::Skipped,
+        source: Source::Lyrics,
+        server_name: server_name.to_string(),
+    })
+}
+
+/// Resolve library/location scope via the server API.
+fn resolve_library_scope(
+    client: &MediaServerClient,
+    config: &Config,
+) -> Result<LibraryScope, RatingError> {
+    if config.library_name.is_none() && config.location_name.is_none() {
+        return Ok(LibraryScope {
+            parent_id: None,
+            location_path: None,
+            library_name: None,
+        });
+    }
+    let libraries = client.discover_libraries()?;
+    scope::resolve_from_libraries(
+        &libraries,
+        config.library_name.as_deref(),
+        config.location_name.as_deref(),
+    )
 }
