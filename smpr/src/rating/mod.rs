@@ -361,3 +361,94 @@ fn resolve_library_scope(
         config.location_name.as_deref(),
     )
 }
+
+/// Run the `force` workflow for a single server.
+///
+/// Sets a fixed rating on all tracks in scope. No lyrics evaluation.
+pub fn force_workflow(
+    client: &MediaServerClient,
+    config: &Config,
+    server_config: &ServerConfig,
+    target_rating: &str,
+) -> Result<Vec<ItemResult>, RatingError> {
+    let lib_scope = resolve_library_scope(client, config)?;
+    let items = client.prefetch_audio_items(false, lib_scope.parent_id.as_deref())?;
+    let items = if let Some(ref loc_path) = lib_scope.location_path {
+        scope::filter_by_location(items, loc_path)
+    } else {
+        items
+    };
+
+    log::info!("force-rating {} items as '{}'", items.len(), target_rating);
+
+    let mut results = Vec::new();
+    for (view, _) in &items {
+        let label = view.path.as_deref().unwrap_or(&view.id);
+        let prev = view.official_rating.as_deref();
+        let act =
+            action::decide_rating_action(target_rating, prev, config.overwrite, config.dry_run);
+        let act = if matches!(act, RatingAction::Set) {
+            action::apply_rating(client, &view.id, target_rating, label)
+        } else {
+            act
+        };
+        results.push(ItemResult {
+            item_id: view.id.clone(),
+            path: view.path.clone(),
+            artist: view.album_artist.clone(),
+            album: view.album.clone(),
+            tier: Some(target_rating.to_string()),
+            matched_words: vec![],
+            previous_rating: prev.map(String::from),
+            action: act,
+            source: Source::Force,
+            server_name: server_config.name.clone(),
+        });
+    }
+    Ok(results)
+}
+
+/// Run the `reset` workflow for a single server.
+///
+/// Removes OfficialRating from all tracks in scope.
+pub fn reset_workflow(
+    client: &MediaServerClient,
+    config: &Config,
+    server_config: &ServerConfig,
+) -> Result<Vec<ItemResult>, RatingError> {
+    let lib_scope = resolve_library_scope(client, config)?;
+    let items = client.prefetch_audio_items(false, lib_scope.parent_id.as_deref())?;
+    let items = if let Some(ref loc_path) = lib_scope.location_path {
+        scope::filter_by_location(items, loc_path)
+    } else {
+        items
+    };
+
+    log::info!("resetting ratings on {} items", items.len());
+
+    let mut results = Vec::new();
+    for (view, _) in &items {
+        let label = view.path.as_deref().unwrap_or(&view.id);
+        let prev = view.official_rating.as_deref();
+        let act = action::decide_clear_action(prev, true, config.dry_run);
+        let act = if matches!(act, RatingAction::Cleared) {
+            // apply_rating("") returns Cleared on success, Error on failure
+            action::apply_rating(client, &view.id, "", label)
+        } else {
+            act
+        };
+        results.push(ItemResult {
+            item_id: view.id.clone(),
+            path: view.path.clone(),
+            artist: view.album_artist.clone(),
+            album: view.album.clone(),
+            tier: None,
+            matched_words: vec![],
+            previous_rating: prev.map(String::from),
+            action: act,
+            source: Source::Reset,
+            server_name: server_config.name.clone(),
+        });
+    }
+    Ok(results)
+}
