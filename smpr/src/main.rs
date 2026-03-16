@@ -187,23 +187,6 @@ fn run_workflows(cfg: &config::Config, workflow: &Workflow) {
     let mut had_failure = false;
 
     for server_config in &cfg.servers {
-        let label = if multi {
-            format!(
-                "{} ({})",
-                server_config.name,
-                server_config
-                    .server_type
-                    .as_ref()
-                    .map(|t| format!("{t:?}"))
-                    .unwrap_or_else(|| "auto".into())
-            )
-        } else {
-            String::new()
-        };
-        if multi {
-            eprintln!("--- Processing {} ---", label);
-        }
-
         let server_type = match server_config.server_type.clone() {
             Some(t) => t,
             None => match server::detect_server_type(&server_config.url) {
@@ -218,6 +201,15 @@ fn run_workflows(cfg: &config::Config, workflow: &Workflow) {
                 }
             },
         };
+
+        let label = if multi {
+            format!("{} ({:?})", server_config.name, server_type)
+        } else {
+            String::new()
+        };
+        if multi {
+            eprintln!("--- Processing {} ---", label);
+        }
 
         let client = server::MediaServerClient::new(
             server_config.url.clone(),

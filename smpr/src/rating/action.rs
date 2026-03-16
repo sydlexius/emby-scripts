@@ -1,4 +1,4 @@
-use crate::rating::RatingAction;
+use crate::rating::{RatingAction, RatingError};
 use crate::server::MediaServerError;
 
 /// Decide what action to take for setting a rating.
@@ -48,26 +48,31 @@ pub fn decide_clear_action(
 }
 
 /// GET-then-POST round-trip to set OfficialRating on an item.
-/// Returns the final `RatingAction` (Set, Cleared, or Error).
+///
+/// Returns `Ok(RatingAction)` on success or non-auth failure.
+/// Returns `Err(RatingError::Auth)` on 401/403 so the caller can abort the workflow.
 pub fn apply_rating(
     client: &crate::server::MediaServerClient,
     item_id: &str,
     rating: &str,
     label: &str,
-) -> RatingAction {
+) -> Result<RatingAction, RatingError> {
     match apply_rating_inner(client, item_id, rating) {
         Ok(()) => {
             if rating.is_empty() {
                 log::info!("cleared rating from {}", label);
-                RatingAction::Cleared
+                Ok(RatingAction::Cleared)
             } else {
                 log::info!("set {} on {}", rating, label);
-                RatingAction::Set
+                Ok(RatingAction::Set)
             }
+        }
+        Err(MediaServerError::Http { status, .. }) if status == 401 || status == 403 => {
+            Err(RatingError::Auth(status))
         }
         Err(e) => {
             log::error!("failed to update {}: {}", label, e);
-            RatingAction::Error(e.to_string())
+            Ok(RatingAction::Error(e.to_string()))
         }
     }
 }

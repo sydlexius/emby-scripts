@@ -490,8 +490,12 @@ mod integration {
     use crate::server::MediaServerClient;
     use std::collections::BTreeMap;
 
+    fn uat_enabled() -> bool {
+        std::env::var("SMPR_UAT_TEST").map_or(false, |v| v == "1")
+    }
+
     fn uat_jellyfin_client() -> MediaServerClient {
-        dotenvy::from_filename("../../.env").ok();
+        dotenvy::from_filename("../.env").ok();
         let api_key = std::env::var("UAT_JELLYFIN_API_KEY")
             .expect("UAT_JELLYFIN_API_KEY must be set for integration tests");
         MediaServerClient::new(
@@ -533,8 +537,11 @@ mod integration {
     }
 
     #[test]
-    #[ignore] // Run with: SMPR_UAT_TEST=1 cargo test -- --ignored
     fn uat_rate_dry_run() {
+        if !uat_enabled() {
+            eprintln!("skipping: SMPR_UAT_TEST not set");
+            return;
+        }
         let client = uat_jellyfin_client();
         let cfg = dry_run_config();
         let srv = test_server_config();
@@ -553,8 +560,11 @@ mod integration {
     }
 
     #[test]
-    #[ignore]
     fn uat_force_dry_run() {
+        if !uat_enabled() {
+            eprintln!("skipping: SMPR_UAT_TEST not set");
+            return;
+        }
         let client = uat_jellyfin_client();
         let cfg = dry_run_config();
         let srv = test_server_config();
@@ -570,8 +580,11 @@ mod integration {
     }
 
     #[test]
-    #[ignore]
     fn uat_reset_dry_run() {
+        if !uat_enabled() {
+            eprintln!("skipping: SMPR_UAT_TEST not set");
+            return;
+        }
         let client = uat_jellyfin_client();
         let cfg = dry_run_config();
         let srv = test_server_config();

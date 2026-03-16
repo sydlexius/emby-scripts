@@ -227,7 +227,7 @@ fn rate_item(
     if let Some(forced) = force_rating {
         let act = action::decide_rating_action(forced, prev, config.overwrite, config.dry_run);
         let act = if matches!(act, RatingAction::Set) {
-            action::apply_rating(client, &view.id, forced, label)
+            action::apply_rating(client, &view.id, forced, label)?
         } else {
             act
         };
@@ -264,7 +264,7 @@ fn rate_item(
             // Explicit content found
             let act = action::decide_rating_action(tier, prev, config.overwrite, config.dry_run);
             let act = if matches!(act, RatingAction::Set) {
-                action::apply_rating(client, &view.id, tier, label)
+                action::apply_rating(client, &view.id, tier, label)?
             } else {
                 act
             };
@@ -285,7 +285,7 @@ fn rate_item(
         // Clean lyrics — clear existing rating if overwrite enabled
         let act = action::decide_clear_action(prev, config.overwrite, config.dry_run);
         let act = if matches!(act, RatingAction::Cleared) {
-            action::apply_rating(client, &view.id, "", label)
+            action::apply_rating(client, &view.id, "", label)?
         } else {
             act
         };
@@ -307,7 +307,7 @@ fn rate_item(
     if let Some(matched_genre) = engine.match_g_genre(&view.genres) {
         let act = action::decide_rating_action("G", prev, config.overwrite, config.dry_run);
         let act = if matches!(act, RatingAction::Set) {
-            action::apply_rating(client, &view.id, "G", label)
+            action::apply_rating(client, &view.id, "G", label)?
         } else {
             act
         };
@@ -386,7 +386,7 @@ pub fn force_workflow(
         let act =
             action::decide_rating_action(target_rating, prev, config.overwrite, config.dry_run);
         let act = if matches!(act, RatingAction::Set) {
-            action::apply_rating(client, &view.id, target_rating, label)
+            action::apply_rating(client, &view.id, target_rating, label)?
         } else {
             act
         };
@@ -431,7 +431,7 @@ pub fn reset_workflow(
         let act = action::decide_clear_action(prev, true, config.dry_run);
         let act = if matches!(act, RatingAction::Cleared) {
             // apply_rating("") returns Cleared on success, Error on failure
-            action::apply_rating(client, &view.id, "", label)
+            action::apply_rating(client, &view.id, "", label)?
         } else {
             act
         };
