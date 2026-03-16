@@ -104,6 +104,13 @@ pub fn run_wizard(
     let config_dir = resolve_config_dir(cli_config);
     let config_filename = if let Some(cfg) = cli_config {
         let cfg_path = PathBuf::from(cfg);
+        // Reject directories
+        if cfg_path.is_dir() {
+            return Err(WizardError::Prompt(format!(
+                "--config must be a file path, not a directory: {}",
+                cfg_path.display()
+            )));
+        }
         match cfg_path.file_name() {
             Some(name) => name.to_string_lossy().to_string(),
             None => {
@@ -129,37 +136,43 @@ pub fn run_wizard(
         match config::parse_toml(&content) {
             Ok(raw) => Some(raw),
             Err(e) => {
-                eprintln!("Warning: could not parse existing config: {e}");
-                None
+                return Err(WizardError::Prompt(format!(
+                    "existing config at {} could not be parsed: {e}\nFix the config or use --config to specify a different path.",
+                    config_path.display()
+                )));
             }
         }
     } else {
         None
     };
 
-    if let Some(ref existing) = existing {
-        let server_names: Vec<String> = existing
-            .servers
-            .as_ref()
-            .map(|s| s.keys().cloned().collect())
-            .unwrap_or_default();
-        if !server_names.is_empty() {
+    let adding_server = existing
+        .as_ref()
+        .is_some_and(|e| e.servers.as_ref().is_some_and(|s| !s.is_empty()));
+
+    if adding_server {
+        if let Some(ref existing) = existing {
+            let server_names: Vec<String> = existing
+                .servers
+                .as_ref()
+                .map(|s| s.keys().cloned().collect())
+                .unwrap_or_default();
             println!(
                 "Found existing config at {} with server(s): {}",
                 config_path.display(),
                 server_names.join(", ")
             );
-            let add_another = inquire::Confirm::new("Add another server?")
-                .with_default(true)
-                .prompt()
-                .map_err(from_inquire)?;
-            if !add_another {
-                println!(
-                    "No changes made. Run `smpr rate --help` or edit config at {}",
-                    config_path.display()
-                );
-                return Ok(());
-            }
+        }
+        let add_another = inquire::Confirm::new("Add another server?")
+            .with_default(true)
+            .prompt()
+            .map_err(from_inquire)?;
+        if !add_another {
+            println!(
+                "No changes made. Run `smpr rate --help` or edit config at {}",
+                config_path.display()
+            );
+            return Ok(());
         }
     }
 
@@ -177,7 +190,7 @@ pub fn run_wizard(
     );
 
     // Steps 3-5 only run for fresh config (not when adding a server)
-    let (genre_config, detection_config, prefs) = if existing.is_some() {
+    let (genre_config, detection_config, prefs) = if adding_server {
         // Adding a server — skip detection/genre/preference prompts
         (
             library::GenreConfig { genres: vec![] },
@@ -210,6 +223,7 @@ pub fn run_wizard(
         &genre_config,
         &detection_config,
         &prefs,
+        adding_server,
     )?;
 
     println!("\nConfig written to {}", config_path.display());

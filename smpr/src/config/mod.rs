@@ -253,23 +253,23 @@ pub fn resolve_default_config_path_from(cwd: &std::path::Path) -> Option<PathBuf
 }
 
 /// Resolve the default .env file path when --env-file is not specified.
-/// Checks CWD for .env, then the directory containing the config file.
+/// Checks same directory as resolved config file first, then CWD.
 pub fn resolve_default_env_path(config_path: Option<&std::path::Path>) -> Option<PathBuf> {
-    // 1. Check CWD for .env
-    if let Ok(cwd) = std::env::current_dir() {
-        let cwd_env = cwd.join(".env");
-        if cwd_env.exists() {
-            return Some(cwd_env);
-        }
-    }
-
-    // 2. Check same directory as config file
+    // 1. Check same directory as resolved config file
     if let Some(config) = config_path
         && let Some(parent) = config.parent()
     {
         let env_path = parent.join(".env");
         if env_path.exists() {
             return Some(env_path);
+        }
+    }
+
+    // 2. Fallback to CWD
+    if let Ok(cwd) = std::env::current_dir() {
+        let cwd_env = cwd.join(".env");
+        if cwd_env.exists() {
+            return Some(cwd_env);
         }
     }
 

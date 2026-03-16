@@ -77,8 +77,10 @@ fn prompt_username_password(url: &str, verbose: bool) -> Result<String, WizardEr
 }
 
 fn prompt_manual_api_key() -> Result<String, WizardError> {
-    let key = inquire::Text::new("API key:")
+    let key = inquire::Password::new("API key:")
         .with_help_message("Find this in your server's dashboard under API Keys")
+        .without_confirmation()
+        .with_display_toggle_enabled()
         .prompt()
         .map_err(from_inquire)?;
 

@@ -19,6 +19,7 @@ pub fn write_config(
     genres: &GenreConfig,
     detection: &DetectionAdditions,
     prefs: &Preferences,
+    adding_server: bool,
 ) -> Result<(), WizardError> {
     // Ensure parent directory exists
     if let Some(parent) = config_path.parent() {
@@ -26,7 +27,7 @@ pub fn write_config(
     }
 
     // Build the TOML config
-    let config = build_raw_config(existing, server, genres, detection, prefs);
+    let config = build_raw_config(existing, server, genres, detection, prefs, adding_server);
     let toml_str = toml::to_string_pretty(&config)?;
     std::fs::write(config_path, toml_str)?;
 
@@ -42,6 +43,7 @@ fn build_raw_config(
     genres: &GenreConfig,
     detection: &DetectionAdditions,
     prefs: &Preferences,
+    adding_server: bool,
 ) -> RawConfig {
     // Start with existing or empty
     let mut servers = existing.and_then(|e| e.servers.clone()).unwrap_or_default();
@@ -68,7 +70,7 @@ fn build_raw_config(
     let false_positives =
         merge_defaults_and_extras(defaults::FALSE_POSITIVES, &detection.extra_false_positives);
 
-    let detection_section = if existing.is_some() {
+    let detection_section = if adding_server {
         // When adding a server, preserve existing detection config
         existing.and_then(|e| e.detection.clone())
     } else {
@@ -94,7 +96,7 @@ fn build_raw_config(
         })
     };
 
-    let general = if existing.is_some() {
+    let general = if adding_server {
         existing.and_then(|e| e.general.clone())
     } else {
         Some(RawGeneral {
@@ -197,6 +199,7 @@ mod tests {
             &genres,
             &detection,
             &prefs,
+            false,
         )
         .unwrap();
 
@@ -259,6 +262,7 @@ overwrite = true
             &genres,
             &detection,
             &prefs,
+            true,
         )
         .unwrap();
 
@@ -303,6 +307,7 @@ overwrite = true
             &genres,
             &detection,
             &prefs,
+            false,
         )
         .unwrap();
 
