@@ -202,34 +202,89 @@ fn main() {
             ignore_forced,
         } => {
             let cfg = load_config(&common, overwrite.resolve(), ignore_forced);
-            if cfg.verbose {
-                eprintln!("Config loaded: {} server(s)", cfg.servers.len());
+            let engine = detection::DetectionEngine::new(&cfg.detection);
+            let server_config = &cfg.servers[0];
+            let server_type = server_config.server_type.clone().unwrap_or_else(|| {
+                server::detect_server_type(&server_config.url).unwrap_or_else(|e| {
+                    eprintln!(
+                        "Error: failed to detect server type for '{}': {e}",
+                        server_config.name
+                    );
+                    process::exit(1);
+                })
+            });
+            let client = server::MediaServerClient::new(
+                server_config.url.clone(),
+                server_config.api_key.clone(),
+                server_type,
+            );
+            match rating::rate_workflow(&client, &cfg, server_config, &engine) {
+                Ok(results) => {
+                    eprintln!("Processed {} items", results.len());
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
             }
-            eprintln!("rate: not yet implemented");
-            process::exit(1);
         }
         Commands::Force {
-            rating,
+            rating: target_rating,
             common,
             overwrite,
         } => {
             let cfg = load_config(&common, overwrite.resolve(), false);
-            if cfg.verbose {
-                eprintln!(
-                    "Config loaded: {} server(s), force rating={rating}",
-                    cfg.servers.len()
-                );
+            let server_config = &cfg.servers[0];
+            let server_type = server_config.server_type.clone().unwrap_or_else(|| {
+                server::detect_server_type(&server_config.url).unwrap_or_else(|e| {
+                    eprintln!(
+                        "Error: failed to detect server type for '{}': {e}",
+                        server_config.name
+                    );
+                    process::exit(1);
+                })
+            });
+            let client = server::MediaServerClient::new(
+                server_config.url.clone(),
+                server_config.api_key.clone(),
+                server_type,
+            );
+            match rating::force_workflow(&client, &cfg, server_config, &target_rating) {
+                Ok(results) => {
+                    eprintln!("Force-rated {} items", results.len());
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
             }
-            eprintln!("force: not yet implemented");
-            process::exit(1);
         }
         Commands::Reset { common } => {
             let cfg = load_config(&common, None, false);
-            if cfg.verbose {
-                eprintln!("Config loaded: {} server(s)", cfg.servers.len());
+            let server_config = &cfg.servers[0];
+            let server_type = server_config.server_type.clone().unwrap_or_else(|| {
+                server::detect_server_type(&server_config.url).unwrap_or_else(|e| {
+                    eprintln!(
+                        "Error: failed to detect server type for '{}': {e}",
+                        server_config.name
+                    );
+                    process::exit(1);
+                })
+            });
+            let client = server::MediaServerClient::new(
+                server_config.url.clone(),
+                server_config.api_key.clone(),
+                server_type,
+            );
+            match rating::reset_workflow(&client, &cfg, server_config) {
+                Ok(results) => {
+                    eprintln!("Reset {} items", results.len());
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
             }
-            eprintln!("reset: not yet implemented");
-            process::exit(1);
         }
         Commands::Configure { .. } => {
             eprintln!("configure: not yet implemented");
