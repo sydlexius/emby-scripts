@@ -219,6 +219,56 @@ pub struct CliInput {
     pub ignore_forced: bool,
 }
 
+// ── Config path auto-discovery ─────────────────────────────────────
+
+/// Resolve the default config file path when --config is not specified.
+/// Checks CWD for explicit_config.toml, then platform config dir.
+pub fn resolve_default_config_path() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    resolve_default_config_path_from(&cwd)
+}
+
+/// Testable version that takes CWD as a parameter.
+pub fn resolve_default_config_path_from(cwd: &std::path::Path) -> Option<PathBuf> {
+    // 1. Check CWD for explicit_config.toml
+    let cwd_config = cwd.join("explicit_config.toml");
+    if cwd_config.exists() {
+        return Some(cwd_config);
+    }
+
+    // 2. Check platform config dir
+    let platform_config = dirs::config_dir()?.join("smpr").join("config.toml");
+    if platform_config.exists() {
+        return Some(platform_config);
+    }
+
+    None
+}
+
+/// Resolve the default .env file path when --env-file is not specified.
+/// Checks CWD for .env, then the directory containing the config file.
+pub fn resolve_default_env_path(config_path: Option<&std::path::Path>) -> Option<PathBuf> {
+    // 1. Check CWD for .env
+    if let Ok(cwd) = std::env::current_dir() {
+        let cwd_env = cwd.join(".env");
+        if cwd_env.exists() {
+            return Some(cwd_env);
+        }
+    }
+
+    // 2. Check same directory as config file
+    if let Some(config) = config_path
+        && let Some(parent) = config.parent()
+    {
+        let env_path = parent.join(".env");
+        if env_path.exists() {
+            return Some(env_path);
+        }
+    }
+
+    None
+}
+
 // ── Config loading ─────────────────────────────────────────────────
 
 impl Config {
@@ -232,8 +282,14 @@ impl Config {
                 parse_toml(&content).map_err(ConfigError::TomlParse)?
             }
             None => {
-                // No --config provided; use empty defaults
-                RawConfig::default()
+                // No --config provided; try auto-discovery
+                if let Some(path) = resolve_default_config_path() {
+                    log::debug!("Auto-discovered config at {}", path.display());
+                    let content = std::fs::read_to_string(&path).map_err(ConfigError::Io)?;
+                    parse_toml(&content).map_err(ConfigError::TomlParse)?
+                } else {
+                    RawConfig::default()
+                }
             }
         };
 
@@ -241,6 +297,11 @@ impl Config {
         if let Some(env_path) = &cli.env_file {
             dotenvy::from_path(env_path)
                 .map_err(|e| ConfigError::EnvFile(format!("{}: {e}", env_path.display())))?;
+        } else if let Some(env_path) =
+            resolve_default_env_path(resolve_default_config_path().as_deref())
+        {
+            log::debug!("Auto-discovered .env at {}", env_path.display());
+            let _ = dotenvy::from_path(&env_path); // best-effort, don't fail
         }
 
         // 3. Resolve servers

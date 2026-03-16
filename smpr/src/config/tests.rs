@@ -734,3 +734,27 @@ overwrite = false
 
     assert_eq!(reparsed.general.unwrap().overwrite, Some(false));
 }
+
+#[test]
+fn resolve_discovers_cwd_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("explicit_config.toml");
+    std::fs::write(
+        &config_path,
+        r#"
+[servers.test]
+url = "http://localhost:8096"
+"#,
+    )
+    .unwrap();
+
+    let resolved = super::resolve_default_config_path_from(dir.path());
+    assert_eq!(resolved, Some(config_path));
+}
+
+#[test]
+fn resolve_returns_none_when_no_config_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let resolved = super::resolve_default_config_path_from(dir.path());
+    assert!(resolved.is_none());
+}
