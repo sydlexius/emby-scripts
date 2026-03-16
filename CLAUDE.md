@@ -188,6 +188,7 @@ url = "http://192.168.1.126:8096"
 [servers.home-emby.libraries.Music.locations.Classical]
 # force_rating = "G"  # optional; force tracks in this location to G
 ```
+
 ```bash
 HOME_EMBY_API_KEY=your-key
 ```
