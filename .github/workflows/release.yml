@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: smpr
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # stable
+        with:
+          toolchain: "1.94"
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: smpr
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Rename binary
+        run: mv target/release/smpr target/release/smpr-linux-x86_64
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          cd ..
+          gh release create "$TAG_NAME" \
+            smpr/target/release/smpr-linux-x86_64 \
+            --title "$TAG_NAME" \
+            --generate-notes
