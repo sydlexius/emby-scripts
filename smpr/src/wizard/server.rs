@@ -135,7 +135,9 @@ pub fn prompt_server(verbose: bool) -> Result<ServerInfo, WizardError> {
             Err(e) => Ok(inquire::validator::Validation::Invalid(e.into())),
         })
         .prompt()
-        .map_err(from_inquire)?;
+        .map_err(from_inquire)?
+        .trim()
+        .to_string();
 
     Ok(ServerInfo {
         url,

@@ -26,6 +26,17 @@ pub fn write_config(
         std::fs::create_dir_all(parent)?;
     }
 
+    // Check for duplicate server label
+    if let Some(existing_config) = existing
+        && let Some(servers) = &existing_config.servers
+        && servers.contains_key(&server.label)
+    {
+        return Err(WizardError::Prompt(format!(
+            "server '{}' already exists in config. Choose a different label.",
+            server.label
+        )));
+    }
+
     // Build the TOML config
     let config = build_raw_config(existing, server, genres, detection, prefs, adding_server);
     let toml_str = toml::to_string_pretty(&config)?;

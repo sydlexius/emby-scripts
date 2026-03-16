@@ -127,8 +127,17 @@ pub fn run_wizard(
     };
     let config_path = config_dir.join(&config_filename);
 
-    let env_filename = cli_env_file.unwrap_or(".env");
-    let env_path = config_dir.join(env_filename);
+    let env_path = match cli_env_file {
+        Some(p) => {
+            let p = PathBuf::from(p);
+            if p.is_absolute() {
+                p
+            } else {
+                config_dir.join(p)
+            }
+        }
+        None => config_dir.join(".env"),
+    };
 
     // Step 0: Detect existing config
     let existing = if config_path.exists() {
