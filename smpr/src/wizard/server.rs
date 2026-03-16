@@ -14,7 +14,7 @@ pub struct ServerInfo {
 const COMMON_URLS: &[&str] = &[
     "http://localhost:8096",
     "http://localhost:8097",
-    "http://localhost:8920",
+    "https://localhost:8920",
     "https://localhost:8096",
     "https://localhost:8097",
 ];
