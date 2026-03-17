@@ -74,6 +74,7 @@ pub fn init_force_state(state: &mut AppState) {
         radio_cursor: 0,
         expanded,
         scroll_offset: 0,
+        view_height: 0,
     };
 
     // Set radio_cursor to match current rating of cursor node
