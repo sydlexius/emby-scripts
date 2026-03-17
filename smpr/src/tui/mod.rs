@@ -1,6 +1,7 @@
 // Configure wizard TUI (ratatui)
 
 pub mod app;
+pub mod event;
 pub mod keymap;
 
 #[cfg(test)]
