@@ -79,7 +79,7 @@ fn render_title_bar(state: &AppState, area: Rect, buf: &mut Buffer) {
                 .fg(Color::Blue)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" · ", Style::default().fg(Color::Gray)),
         Span::styled(path_str, Style::default().fg(Color::Green)),
     ];
     if state.read_only {
@@ -117,10 +117,10 @@ fn render_status_bar(state: &AppState, area: Rect, buf: &mut Buffer) {
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         )
     } else {
-        Span::styled("no changes", Style::default().fg(Color::DarkGray))
+        Span::styled("no changes", Style::default().fg(Color::Gray))
     };
     let line = Line::from(vec![
-        Span::styled(format!(" {hints}"), Style::default().fg(Color::DarkGray)),
+        Span::styled(format!(" {hints}"), Style::default().fg(Color::White)),
         Span::raw("  "),
         dirty_text,
     ]);
