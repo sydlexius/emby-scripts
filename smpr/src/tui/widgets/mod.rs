@@ -1,3 +1,4 @@
+pub mod detection;
 pub mod popup;
 pub mod preferences;
 pub mod sidebar;
