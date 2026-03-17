@@ -4,6 +4,7 @@ use crate::config::RawConfig;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 
 pub fn label_to_env_var(label: &str) -> String {
@@ -12,12 +13,18 @@ pub fn label_to_env_var(label: &str) -> String {
 
 pub fn save_config(config: &RawConfig, path: &Path) -> io::Result<()> {
     let content = toml::to_string_pretty(config).map_err(io::Error::other)?;
-    let tmp_path = path.with_extension("toml.tmp");
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&tmp_path, &content)?;
-    fs::rename(&tmp_path, path)?;
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.persist(path).map_err(|e| e.error)?;
     Ok(())
 }
 
@@ -98,7 +105,9 @@ pub fn save_env(
         }
     }
 
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
         fs::create_dir_all(parent)?;
     }
 
@@ -107,9 +116,12 @@ pub fn save_env(
         content.push('\n');
     }
 
-    // Atomic write: write to tmp, rename over original
-    let tmp_path = path.with_extension("env.tmp");
-    fs::write(&tmp_path, &content)?;
-    fs::rename(&tmp_path, path)?;
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut tmp = tempfile::NamedTempFile::new_in(dir)?;
+    tmp.write_all(content.as_bytes())?;
+    tmp.persist(path).map_err(|e| e.error)?;
     Ok(())
 }

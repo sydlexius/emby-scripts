@@ -164,7 +164,9 @@ pub fn is_node_visible(state: &ForceTreeState, index: usize) -> bool {
 /// Apply force rating from radio_cursor to the node at cursor position.
 pub fn apply_force_rating(state: &mut AppState) {
     let cursor = state.force_state.cursor;
-    let node = &state.force_state.nodes[cursor];
+    let Some(node) = state.force_state.nodes.get(cursor).cloned() else {
+        return;
+    };
     if node.depth == 0 {
         return; // server header — not editable
     }
@@ -218,7 +220,8 @@ pub fn render_force_tree(state: &AppState, area: Rect, buf: &mut Buffer) {
     let inner = block.inner(area);
     block.render(area, buf);
 
-    if state.force_state.nodes.is_empty() {
+    let has_editable = state.force_state.nodes.iter().any(|n| n.depth > 0);
+    if !has_editable {
         Paragraph::new(
             "  No servers with libraries configured.\n  Press 'r' on a server to scan libraries.",
         )

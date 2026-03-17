@@ -101,6 +101,11 @@ pub fn run_editor(
                     continue;
                 }
 
+                if state.info_message.is_some() {
+                    state.info_message = None;
+                    continue;
+                }
+
                 if state.quit_requested {
                     match key.code {
                         crossterm::event::KeyCode::Char('y') => {
@@ -141,6 +146,7 @@ pub fn run_editor(
                                     state.server_state.selected = count - 1;
                                 }
                                 state.mark_dirty();
+                                widgets::force_tree::init_force_state(&mut state);
                             }
                             state.server_state.delete_requested = false;
                         }
@@ -773,10 +779,12 @@ fn scan_server_libraries(state: &mut AppState) {
             let existing_locs = lib_entry.locations.get_or_insert_with(BTreeMap::new);
             for loc_path in &lib.locations {
                 // Use the last path component as the location label
-                let loc_name = std::path::Path::new(loc_path)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| loc_path.clone());
+                let base_name = crate::util::location_leaf(loc_path).to_string();
+                let loc_name = if existing_locs.contains_key(&base_name) {
+                    loc_path.clone()
+                } else {
+                    base_name
+                };
                 existing_locs
                     .entry(loc_name)
                     .or_insert(crate::config::RawLocationConfig { force_rating: None });
@@ -786,7 +794,7 @@ fn scan_server_libraries(state: &mut AppState) {
 
     let count = libraries.len();
     state.mark_dirty();
-    state.error_message = Some(format!(
+    state.info_message = Some(format!(
         "Found {count} music {}",
         if count == 1 { "library" } else { "libraries" }
     ));
@@ -816,24 +824,34 @@ fn scan_server_genres(state: &mut AppState) {
         .map(|g| g.to_lowercase())
         .collect();
 
+    let mut errors: Vec<String> = Vec::new();
+
     for (url, api_key, type_str) in &servers {
         let server_type = match type_str.as_deref() {
             Some("emby") => crate::config::ServerType::Emby,
             Some("jellyfin") => crate::config::ServerType::Jellyfin,
             _ => match crate::server::detect_server_type(url) {
                 Ok(t) => t,
-                Err(_) => continue,
+                Err(e) => {
+                    errors.push(format!("{url}: {e}"));
+                    continue;
+                }
             },
         };
 
         let client =
             crate::server::MediaServerClient::new(url.clone(), api_key.clone(), server_type);
 
-        if let Ok(genres) = client.list_genres() {
-            for genre in genres {
-                if seen.insert(genre.to_lowercase()) {
-                    state.genre_state.available.push(genre);
+        match client.list_genres() {
+            Ok(genres) => {
+                for genre in genres {
+                    if seen.insert(genre.to_lowercase()) {
+                        state.genre_state.available.push(genre);
+                    }
                 }
+            }
+            Err(e) => {
+                errors.push(format!("{url}: {e}"));
             }
         }
     }
@@ -842,4 +860,8 @@ fn scan_server_genres(state: &mut AppState) {
         .genre_state
         .available
         .sort_by_key(|g| g.to_lowercase());
+
+    if !errors.is_empty() {
+        state.error_message = Some(format!("Genre scan errors: {}", errors.join("; ")));
+    }
 }

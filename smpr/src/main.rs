@@ -311,6 +311,13 @@ fn main() {
             let config_dir = wizard::resolve_config_dir(config.as_deref());
             let config_filename = if let Some(cfg) = &config {
                 let p = PathBuf::from(cfg);
+                if p.is_dir() {
+                    eprintln!(
+                        "Error: --config must be a file path, not a directory: {}",
+                        p.display()
+                    );
+                    process::exit(1);
+                }
                 p.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "config.toml".to_string())

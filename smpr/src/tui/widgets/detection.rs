@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, StatefulWidget, Widget};
+use unicode_width::UnicodeWidthStr;
 
 pub fn get_words(detection: Option<&RawDetection>, category: DetectionCategory) -> Vec<&str> {
     let det = match detection {
@@ -153,7 +154,7 @@ fn render_category_view(state: &AppState, area: Rect, buf: &mut Buffer) {
         let mut x = area.x + 2;
         for word in &words {
             let tag = format!(" {word} ");
-            let len = tag.len() as u16;
+            let len = UnicodeWidthStr::width(tag.as_str()) as u16;
             if x + len > area.x + area.width {
                 y += 1;
                 x = area.x + 2;

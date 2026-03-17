@@ -10,6 +10,7 @@ pub struct Popup<'a> {
     title: &'a str,
     message: &'a str,
     hint: &'a str,
+    border_color: Color,
 }
 
 impl<'a> Popup<'a> {
@@ -18,7 +19,13 @@ impl<'a> Popup<'a> {
             title,
             message,
             hint,
+            border_color: Color::Yellow,
         }
+    }
+
+    pub fn border_color(mut self, color: Color) -> Self {
+        self.border_color = color;
+        self
     }
 }
 
@@ -38,7 +45,7 @@ impl Widget for Popup<'_> {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(self.border_color))
             .title(self.title);
 
         let inner = block.inner(popup_area);

@@ -239,6 +239,7 @@ pub struct AppState {
     pub read_only: bool,
     pub quit_requested: bool,
     pub error_message: Option<String>,
+    pub info_message: Option<String>,
 
     // Per-section state
     pub server_state: ServerListState,
@@ -276,6 +277,7 @@ impl AppState {
             read_only: false,
             quit_requested: false,
             error_message: None,
+            info_message: None,
             server_state: ServerListState::default(),
             genre_state: GenrePickerState::default(),
             force_state: ForceTreeState::default(),

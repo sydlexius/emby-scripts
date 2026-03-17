@@ -8,6 +8,7 @@ use ratatui::widgets::{
     Block, Borders, List, ListItem, ListState, Paragraph, StatefulWidget, Widget,
 };
 use std::collections::HashSet;
+use unicode_width::UnicodeWidthStr;
 
 /// Initialize genre picker state from current config.
 pub fn init_genre_state(state: &mut AppState) {
@@ -163,7 +164,7 @@ fn render_genre_summary(state: &AppState, area: Rect, buf: &mut Buffer) {
 
     for genre in &genres {
         let tag = format!(" {genre} ");
-        let len = tag.len() as u16;
+        let len = UnicodeWidthStr::width(tag.as_str()) as u16;
         if x + len > area.x + area.width {
             y += 1;
             x = area.x + 2;

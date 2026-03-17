@@ -65,6 +65,13 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         .render(area, frame.buffer_mut());
     }
 
+    // Info renders first, error renders on top (errors take priority visually)
+    if let Some(ref msg) = state.info_message {
+        Popup::new(" Info ", msg, "Press any key to dismiss")
+            .border_color(Color::Green)
+            .render(area, frame.buffer_mut());
+    }
+
     if let Some(ref msg) = state.error_message {
         Popup::new(" Error ", msg, "Press any key to dismiss").render(area, frame.buffer_mut());
     }

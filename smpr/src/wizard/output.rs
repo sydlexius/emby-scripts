@@ -75,10 +75,12 @@ fn build_raw_config(
             } else {
                 let mut locs = std::collections::BTreeMap::new();
                 for loc_path in &lib.locations {
-                    let loc_name = std::path::Path::new(loc_path)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| loc_path.clone());
+                    let base_name = crate::util::location_leaf(loc_path).to_string();
+                    let loc_name = if locs.contains_key(&base_name) {
+                        loc_path.clone()
+                    } else {
+                        base_name
+                    };
                     locs.insert(loc_name, RawLocationConfig { force_rating: None });
                 }
                 Some(locs)
