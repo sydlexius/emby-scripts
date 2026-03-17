@@ -155,6 +155,24 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                         (state.detection_state.selected_category + 1)
                             .min(DetectionCategory::ALL.len() - 1);
                 }
+            } else if state.section == Section::Servers {
+                if state.mode == Mode::Editing {
+                    state.server_state.editing_field = match state.server_state.editing_field {
+                        Some(app::ServerField::Url) => Some(app::ServerField::ApiKey),
+                        Some(app::ServerField::ApiKey) => Some(app::ServerField::ServerType),
+                        Some(app::ServerField::ServerType) => Some(app::ServerField::Url),
+                        None => Some(app::ServerField::Url),
+                    };
+                    if let Some(label) = selected_server_label(state) {
+                        load_field_into_input(state, &label);
+                    }
+                } else {
+                    let count = server_count(state);
+                    if count > 0 {
+                        state.server_state.selected =
+                            (state.server_state.selected + 1).min(count - 1);
+                    }
+                }
             }
         }
         Action::PrevItem => {
@@ -165,6 +183,20 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                 } else {
                     state.detection_state.selected_category =
                         state.detection_state.selected_category.saturating_sub(1);
+                }
+            } else if state.section == Section::Servers {
+                if state.mode == Mode::Editing {
+                    state.server_state.editing_field = match state.server_state.editing_field {
+                        Some(app::ServerField::Url) => Some(app::ServerField::ServerType),
+                        Some(app::ServerField::ApiKey) => Some(app::ServerField::Url),
+                        Some(app::ServerField::ServerType) => Some(app::ServerField::ApiKey),
+                        None => Some(app::ServerField::Url),
+                    };
+                    if let Some(label) = selected_server_label(state) {
+                        load_field_into_input(state, &label);
+                    }
+                } else {
+                    state.server_state.selected = state.server_state.selected.saturating_sub(1);
                 }
             }
         }
@@ -191,10 +223,49 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                 state.detection_state.word_cursor = 0;
                 state.mode = Mode::Editing;
             }
+            Section::Servers => {
+                if server_count(state) > 0 {
+                    state.mode = Mode::Editing;
+                    state.server_state.editing_field = Some(app::ServerField::Url);
+                    if let Some(label) = selected_server_label(state) {
+                        load_field_into_input(state, &label);
+                    }
+                }
+            }
             _ => {}
         },
 
         Action::Confirm => {
+            // Adding a new server (label input step) — must come before Detection check
+            if state.section == Section::Servers
+                && state.mode == Mode::Editing
+                && state.server_state.editing_field.is_none()
+            {
+                let label = state.server_state.text_input.text.trim().to_string();
+                if let Err(msg) = app::validate_label(&label) {
+                    state.error_message = Some(msg.to_string());
+                    return;
+                }
+                if app::is_duplicate_label(&state.config, &label) {
+                    state.error_message = Some("Server label already exists".to_string());
+                    return;
+                }
+                let servers = state.config.servers.get_or_insert_with(BTreeMap::new);
+                servers.insert(
+                    label.clone(),
+                    crate::config::RawServerConfig {
+                        url: Some(String::new()),
+                        server_type: None,
+                        libraries: None,
+                    },
+                );
+                state.server_state.selected = servers.keys().position(|k| k == &label).unwrap_or(0);
+                state.server_state.editing_field = Some(app::ServerField::Url);
+                state.server_state.text_input.clear();
+                state.mark_dirty();
+                return;
+            }
+
             if state.section == Section::Detection {
                 if state.detection_state.adding {
                     let word = state.detection_state.text_input.text.trim().to_string();
@@ -211,12 +282,66 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                     state.detection_state.editing = false;
                     state.mode = Mode::Normal;
                 }
+            } else if state.section == Section::Servers
+                && state.mode == Mode::Editing
+                && let Some(label) = selected_server_label(state)
+            {
+                let text = state.server_state.text_input.text.trim().to_string();
+                match state.server_state.editing_field {
+                    Some(app::ServerField::Url) => {
+                        if let Err(msg) = app::validate_url(&text) {
+                            state.error_message = Some(msg.to_string());
+                            return;
+                        }
+                        if let Some(server) = state
+                            .config
+                            .servers
+                            .as_mut()
+                            .and_then(|s| s.get_mut(&label))
+                        {
+                            server.url = Some(text);
+                            state.mark_dirty();
+                        }
+                    }
+                    Some(app::ServerField::ApiKey) => {
+                        state.env_keys.insert(label.clone(), text);
+                        state.mark_dirty();
+                    }
+                    Some(app::ServerField::ServerType) => {
+                        let val = text.to_lowercase();
+                        let type_val = match val.as_str() {
+                            "emby" | "jellyfin" => Some(val),
+                            "" => None,
+                            _ => {
+                                state.error_message =
+                                    Some("Type must be 'emby' or 'jellyfin'".to_string());
+                                return;
+                            }
+                        };
+                        if let Some(server) = state
+                            .config
+                            .servers
+                            .as_mut()
+                            .and_then(|s| s.get_mut(&label))
+                        {
+                            server.server_type = type_val;
+                            state.mark_dirty();
+                        }
+                    }
+                    None => {} // handled above
+                }
+                state.mode = Mode::Normal;
+                state.server_state.editing_field = None;
             }
         }
 
         Action::Cancel => {
             if state.mode == Mode::Editing {
-                if state.detection_state.adding {
+                if state.section == Section::Servers {
+                    state.mode = Mode::Normal;
+                    state.server_state.editing_field = None;
+                    state.server_state.text_input.clear();
+                } else if state.detection_state.adding {
                     state.detection_state.adding = false;
                     state.detection_state.text_input.clear();
                 } else {
@@ -230,6 +355,10 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
             if state.section == Section::Detection && state.detection_state.editing {
                 state.detection_state.adding = true;
                 state.detection_state.text_input.clear();
+            } else if state.section == Section::Servers && state.mode != Mode::Editing {
+                state.mode = Mode::Editing;
+                state.server_state.editing_field = None;
+                state.server_state.text_input.clear();
             }
         }
 
@@ -244,18 +373,35 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                     }
                     state.mark_dirty();
                 }
+            } else if state.section == Section::Servers
+                && state.mode == Mode::Normal
+                && let Some(label) = selected_server_label(state)
+            {
+                if let Some(servers) = state.config.servers.as_mut() {
+                    servers.remove(&label);
+                }
+                state.env_keys.remove(&label);
+                let count = server_count(state);
+                if state.server_state.selected >= count && count > 0 {
+                    state.server_state.selected = count - 1;
+                }
+                state.mark_dirty();
             }
         }
 
         Action::Char(c) => {
             if state.detection_state.adding {
                 state.detection_state.text_input.insert_char(c);
+            } else if state.section == Section::Servers && state.mode == Mode::Editing {
+                state.server_state.text_input.insert_char(c);
             }
         }
 
         Action::Backspace => {
             if state.detection_state.adding {
                 state.detection_state.text_input.delete_back();
+            } else if state.section == Section::Servers && state.mode == Mode::Editing {
+                state.server_state.text_input.delete_back();
             }
         }
 
@@ -268,6 +414,42 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
         Action::PageDown => {}
         Action::ExpandCollapse => {}
     }
+}
+
+fn selected_server_label(state: &AppState) -> Option<String> {
+    state
+        .config
+        .servers
+        .as_ref()
+        .and_then(|s| s.keys().nth(state.server_state.selected).cloned())
+}
+
+fn server_count(state: &AppState) -> usize {
+    state.config.servers.as_ref().map_or(0, |s| s.len())
+}
+
+fn load_field_into_input(state: &mut AppState, label: &str) {
+    let text = match state.server_state.editing_field {
+        Some(app::ServerField::Url) => state
+            .config
+            .servers
+            .as_ref()
+            .and_then(|s| s.get(label))
+            .and_then(|s| s.url.as_deref())
+            .unwrap_or("")
+            .to_string(),
+        Some(app::ServerField::ApiKey) => state.env_keys.get(label).cloned().unwrap_or_default(),
+        Some(app::ServerField::ServerType) => state
+            .config
+            .servers
+            .as_ref()
+            .and_then(|s| s.get(label))
+            .and_then(|s| s.server_type.as_deref())
+            .unwrap_or("")
+            .to_string(),
+        None => String::new(),
+    };
+    state.server_state.text_input.set(&text);
 }
 
 fn save(state: &AppState) -> Result<(), TuiError> {
