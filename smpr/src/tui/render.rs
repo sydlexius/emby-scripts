@@ -100,7 +100,12 @@ fn render_status_bar(state: &AppState, area: Rect, buf: &mut Buffer) {
     let hints = match state.mode {
         Mode::Normal => match state.active_pane {
             Pane::Sidebar => "↑↓ navigate  Tab/Enter content  s save  q quit",
-            Pane::Content => "↑↓ navigate  Tab sidebar  Enter edit  s save  q quit",
+            Pane::Content => match state.section {
+                crate::tui::app::Section::Servers => {
+                    "↑↓ navigate  Enter edit  a add  d delete  r scan libs  s save  q quit"
+                }
+                _ => "↑↓ navigate  Tab sidebar  Enter edit  s save  q quit",
+            },
         },
         Mode::Editing => "Enter confirm  Esc cancel",
         Mode::FullScreen => "↑↓ navigate  Space toggle  / filter  Enter confirm  Esc cancel",

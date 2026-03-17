@@ -522,6 +522,15 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
             {
                 // Request confirmation before deleting
                 state.server_state.delete_requested = true;
+            } else if state.section == Section::ForceRatings && state.mode == Mode::FullScreen {
+                // Delete a library or location from the force-rate tree
+                delete_force_tree_node(state);
+            }
+        }
+
+        Action::Refresh => {
+            if state.section == Section::Servers && state.mode == Mode::Normal {
+                scan_server_libraries(state);
             }
         }
 
@@ -656,4 +665,131 @@ fn save(state: &AppState) -> Result<(), TuiError> {
     io::save_env(&state.env_keys, &state.initial_labels, &state.env_path)?;
     io::save_config(&state.config, &state.config_path)?;
     Ok(())
+}
+
+/// Delete a library or location from the force-rate tree and config.
+fn delete_force_tree_node(state: &mut AppState) {
+    let cursor = state.force_state.cursor;
+    let node = match state.force_state.nodes.get(cursor) {
+        Some(n) if n.depth > 0 => n.clone(),
+        _ => return, // can't delete server headers
+    };
+
+    if let Some(servers) = state.config.servers.as_mut()
+        && let Some(server) = servers.get_mut(&node.server_label)
+        && let Some(ref lib_name) = node.library_label
+    {
+        if let Some(ref loc_name) = node.location_label {
+            // Delete a location
+            if let Some(libraries) = server.libraries.as_mut()
+                && let Some(lib) = libraries.get_mut(lib_name)
+                && let Some(locations) = lib.locations.as_mut()
+            {
+                locations.remove(loc_name);
+            }
+        } else {
+            // Delete an entire library
+            if let Some(libraries) = server.libraries.as_mut() {
+                libraries.remove(lib_name);
+            }
+        }
+    }
+
+    // Rebuild the tree and adjust cursor
+    widgets::force_tree::init_force_state(state);
+    state.mark_dirty();
+}
+
+/// Scan the selected server for music libraries and populate config entries.
+/// Preserves existing force_rating values; adds new libraries/locations.
+fn scan_server_libraries(state: &mut AppState) {
+    let label = match selected_server_label(state) {
+        Some(l) => l,
+        None => return,
+    };
+
+    let server = match state.config.servers.as_ref().and_then(|s| s.get(&label)) {
+        Some(s) => s,
+        None => return,
+    };
+
+    let url = match &server.url {
+        Some(u) if !u.is_empty() => u.clone(),
+        _ => {
+            state.error_message = Some("Server URL is not set".to_string());
+            return;
+        }
+    };
+
+    let api_key = match state.env_keys.get(&label) {
+        Some(k) if !k.is_empty() => k.clone(),
+        _ => {
+            state.error_message = Some("API key is not set for this server".to_string());
+            return;
+        }
+    };
+
+    // Resolve server type — use config value or auto-detect
+    let server_type = match server.server_type.as_deref() {
+        Some("emby") => crate::config::ServerType::Emby,
+        Some("jellyfin") => crate::config::ServerType::Jellyfin,
+        _ => match crate::server::detect_server_type(&url) {
+            Ok(t) => t,
+            Err(e) => {
+                state.error_message = Some(format!("Could not detect server type: {e}"));
+                return;
+            }
+        },
+    };
+
+    let client = crate::server::MediaServerClient::new(url, api_key, server_type);
+
+    let libraries = match client.discover_libraries() {
+        Ok(libs) => libs,
+        Err(e) => {
+            state.error_message = Some(format!("Library scan failed: {e}"));
+            return;
+        }
+    };
+
+    if libraries.is_empty() {
+        state.error_message = Some("No music libraries found on this server".to_string());
+        return;
+    }
+
+    // Merge discovered libraries into config, preserving existing force_rating values
+    let servers = state.config.servers.as_mut().unwrap();
+    let server = servers.get_mut(&label).unwrap();
+    let existing_libs = server.libraries.get_or_insert_with(BTreeMap::new);
+
+    for lib in &libraries {
+        let lib_entry = existing_libs.entry(lib.name.clone()).or_insert_with(|| {
+            crate::config::RawLibraryConfig {
+                force_rating: None,
+                locations: None,
+            }
+        });
+
+        // Add location entries from server (preserving existing force_ratings)
+        if !lib.locations.is_empty() {
+            let existing_locs = lib_entry.locations.get_or_insert_with(BTreeMap::new);
+            for loc_path in &lib.locations {
+                // Use the last path component as the location label
+                let loc_name = std::path::Path::new(loc_path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| loc_path.clone());
+                existing_locs
+                    .entry(loc_name)
+                    .or_insert(crate::config::RawLocationConfig { force_rating: None });
+            }
+        }
+    }
+
+    let count = libraries.len();
+    state.mark_dirty();
+    state.error_message = Some(format!(
+        "Found {count} music {}",
+        if count == 1 { "library" } else { "libraries" }
+    ));
 }

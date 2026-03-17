@@ -18,6 +18,7 @@ pub enum Action {
     Cancel,
     Add,
     Delete,
+    Refresh, // r — scan server libraries
 
     // Full-screen
     Toggle,
@@ -82,6 +83,10 @@ fn map_normal(pane: Pane, section: Section, key: KeyEvent) -> Option<Action> {
                 Section::Servers | Section::Detection => Some(Action::Delete),
                 _ => None,
             },
+            KeyCode::Char('r') => match section {
+                Section::Servers => Some(Action::Refresh),
+                _ => None,
+            },
             _ => None,
         },
     }
@@ -113,6 +118,10 @@ fn map_fullscreen(section: Section, key: KeyEvent) -> Option<Action> {
         KeyCode::Right | KeyCode::Char('l') => Some(Action::NextOption),
         KeyCode::Char('/') => match section {
             Section::Genres => Some(Action::StartFilter),
+            _ => None,
+        },
+        KeyCode::Char('d') => match section {
+            Section::ForceRatings => Some(Action::Delete),
             _ => None,
         },
         KeyCode::Enter => match section {
