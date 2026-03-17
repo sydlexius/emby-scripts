@@ -102,6 +102,7 @@ pub fn run_wizard(
     cli_config: Option<&str>,
     cli_env_file: Option<&str>,
     verbose: bool,
+    add_server: bool,
 ) -> Result<(), WizardError> {
     let config_dir = resolve_config_dir(cli_config);
     let config_filename = if let Some(cfg) = cli_config {
@@ -150,11 +151,12 @@ pub fn run_wizard(
         None
     };
 
-    let adding_server = existing
-        .as_ref()
-        .is_some_and(|e| e.servers.as_ref().is_some_and(|s| !s.is_empty()));
+    let adding_server = add_server
+        || existing
+            .as_ref()
+            .is_some_and(|e| e.servers.as_ref().is_some_and(|s| !s.is_empty()));
 
-    if adding_server {
+    if adding_server && !add_server {
         if let Some(ref existing) = existing {
             let server_names: Vec<String> = existing
                 .servers
