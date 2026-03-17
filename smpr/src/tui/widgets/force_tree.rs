@@ -252,13 +252,6 @@ pub fn render_force_tree(state: &AppState, area: Rect, buf: &mut Buffer) {
         let is_cursor = i == state.force_state.cursor;
         let indent = "  ".repeat(node.depth);
 
-        // Background for cursor row
-        if is_cursor {
-            for x in inner.x..inner.x + inner.width {
-                buf[(x, y)].set_style(Style::default().bg(Color::DarkGray));
-            }
-        }
-
         let mut spans: Vec<Span> = Vec::new();
         spans.push(Span::raw(indent));
 
@@ -328,6 +321,15 @@ pub fn render_force_tree(state: &AppState, area: Rect, buf: &mut Buffer) {
         }
 
         buf.set_line(inner.x, y, &Line::from(spans), inner.width);
+
+        // Apply cursor row background AFTER rendering text (set_line overwrites styles)
+        if is_cursor {
+            for x in inner.x..inner.x + inner.width {
+                let cell = &mut buf[(x, y)];
+                cell.set_style(cell.style().bg(Color::DarkGray));
+            }
+        }
+
         y += 1;
     }
 }

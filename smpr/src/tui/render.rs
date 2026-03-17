@@ -108,7 +108,15 @@ fn render_status_bar(state: &AppState, area: Rect, buf: &mut Buffer) {
             },
         },
         Mode::Editing => "Enter confirm  Esc cancel",
-        Mode::FullScreen => "↑↓ navigate  Space toggle  / filter  Enter confirm  Esc cancel",
+        Mode::FullScreen => match state.section {
+            crate::tui::app::Section::ForceRatings => {
+                "↑↓ navigate  ←→ rating  Space apply  Enter expand  d delete  Esc done"
+            }
+            crate::tui::app::Section::Genres => {
+                "↑↓ navigate  Space toggle  / filter  Enter confirm  Esc cancel"
+            }
+            _ => "↑↓ navigate  Space toggle  Enter confirm  Esc cancel",
+        },
         Mode::Filtering => "Type to filter  Enter confirm  Esc cancel",
     };
     let dirty_text = if state.dirty {
