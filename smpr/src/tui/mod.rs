@@ -11,6 +11,8 @@ pub mod widgets;
 #[cfg(test)]
 mod app_tests;
 #[cfg(test)]
+mod force_tree_tests;
+#[cfg(test)]
 mod io_tests;
 #[cfg(test)]
 mod keymap_tests;
@@ -181,6 +183,27 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                     filtered.len().saturating_sub(1)
                 };
                 state.genre_state.cursor = (state.genre_state.cursor + 1).min(max);
+            } else if state.section == Section::ForceRatings && state.mode == Mode::FullScreen {
+                let len = state.force_state.nodes.len();
+                let mut next = state.force_state.cursor + 1;
+                while next < len {
+                    let node = &state.force_state.nodes[next];
+                    if node.depth == 0 {
+                        next += 1;
+                        continue;
+                    }
+                    if !widgets::force_tree::is_node_visible(&state.force_state, next) {
+                        next += 1;
+                        continue;
+                    }
+                    break;
+                }
+                if next < len {
+                    state.force_state.cursor = next;
+                    state.force_state.radio_cursor = widgets::force_tree::rating_to_index(
+                        &state.force_state.nodes[next].force_rating,
+                    );
+                }
             }
         }
         Action::PrevItem => {
@@ -208,6 +231,32 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                 }
             } else if state.section == Section::Genres && state.mode == Mode::FullScreen {
                 state.genre_state.cursor = state.genre_state.cursor.saturating_sub(1);
+            } else if state.section == Section::ForceRatings && state.mode == Mode::FullScreen {
+                let mut prev = state.force_state.cursor.saturating_sub(1);
+                loop {
+                    let node = &state.force_state.nodes[prev];
+                    if node.depth == 0 && prev > 0 {
+                        prev -= 1;
+                        continue;
+                    }
+                    if node.depth == 0 {
+                        break; // at start, can't go further
+                    }
+                    if !widgets::force_tree::is_node_visible(&state.force_state, prev) {
+                        if prev == 0 {
+                            break;
+                        }
+                        prev -= 1;
+                        continue;
+                    }
+                    break;
+                }
+                if state.force_state.nodes[prev].depth > 0 {
+                    state.force_state.cursor = prev;
+                    state.force_state.radio_cursor = widgets::force_tree::rating_to_index(
+                        &state.force_state.nodes[prev].force_rating,
+                    );
+                }
             }
         }
 
@@ -246,7 +295,10 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                 widgets::genre_picker::init_genre_state(state);
                 state.mode = Mode::FullScreen;
             }
-            _ => {}
+            Section::ForceRatings => {
+                widgets::force_tree::init_force_state(state);
+                state.mode = Mode::FullScreen;
+            }
         },
 
         Action::Confirm => {
@@ -380,6 +432,9 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                 state.genre_state.filter_active = false;
                 state.mode = Mode::Normal;
                 return;
+            } else if state.section == Section::ForceRatings && state.mode == Mode::FullScreen {
+                state.mode = Mode::Normal;
+                return;
             }
             if state.mode == Mode::Editing {
                 if state.section == Section::Servers {
@@ -470,10 +525,20 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                     widgets::genre_picker::sync_genres_to_config(state);
                     state.mark_dirty();
                 }
+            } else if state.section == Section::ForceRatings && state.mode == Mode::FullScreen {
+                widgets::force_tree::apply_force_rating(state);
             }
         }
-        Action::NextOption => {}
-        Action::PrevOption => {}
+        Action::NextOption => {
+            if state.section == Section::ForceRatings && state.mode == Mode::FullScreen {
+                state.force_state.radio_cursor = (state.force_state.radio_cursor + 1).min(3);
+            }
+        }
+        Action::PrevOption => {
+            if state.section == Section::ForceRatings && state.mode == Mode::FullScreen {
+                state.force_state.radio_cursor = state.force_state.radio_cursor.saturating_sub(1);
+            }
+        }
         Action::StartFilter => {
             if state.section == Section::Genres && state.mode == Mode::FullScreen {
                 state.genre_state.filter_active = true;
@@ -492,7 +557,23 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                 state.genre_state.cursor = (state.genre_state.cursor + 10).min(max);
             }
         }
-        Action::ExpandCollapse => {}
+        Action::ExpandCollapse => {
+            if state.section == Section::ForceRatings && state.mode == Mode::FullScreen {
+                let cursor = state.force_state.cursor;
+                if state
+                    .force_state
+                    .nodes
+                    .get(cursor)
+                    .is_some_and(|n| n.is_library)
+                {
+                    if state.force_state.expanded.contains(&cursor) {
+                        state.force_state.expanded.remove(&cursor);
+                    } else {
+                        state.force_state.expanded.insert(cursor);
+                    }
+                }
+            }
+        }
     }
 }
 

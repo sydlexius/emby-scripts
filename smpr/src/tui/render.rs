@@ -131,12 +131,8 @@ fn render_content(state: &AppState, area: Rect, buf: &mut Buffer) {
         Section::Genres => {
             super::widgets::genre_picker::render_genre_picker(state, area, buf);
         }
-        _ => {
-            let label = state.section.label();
-            let msg = format!("  {label} — content coming soon");
-            Paragraph::new(msg)
-                .style(Style::default().fg(Color::DarkGray))
-                .render(area, buf);
+        Section::ForceRatings => {
+            super::widgets::force_tree::render_force_tree(state, area, buf);
         }
     }
 }
