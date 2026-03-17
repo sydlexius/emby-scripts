@@ -308,9 +308,114 @@ fn main() {
             env_file,
             verbose: v,
         } => {
-            if let Err(e) = wizard::run_wizard(config.as_deref(), env_file.as_deref(), v) {
-                eprintln!("Error: {e}");
-                process::exit(1);
+            let config_dir = wizard::resolve_config_dir(config.as_deref());
+            let config_filename = if let Some(cfg) = &config {
+                let p = PathBuf::from(cfg);
+                if p.is_dir() {
+                    eprintln!(
+                        "Error: --config must be a file path, not a directory: {}",
+                        p.display()
+                    );
+                    process::exit(1);
+                }
+                p.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "config.toml".to_string())
+            } else if config_dir == std::env::current_dir().unwrap_or_default() {
+                "explicit_config.toml".to_string()
+            } else {
+                "config.toml".to_string()
+            };
+            let config_path = config_dir.join(&config_filename);
+
+            let env_path = match &env_file {
+                Some(p) => PathBuf::from(p),
+                None => config_dir.join(".env"),
+            };
+
+            // Try to load existing config
+            let existing = if config_path.is_file() {
+                match std::fs::read_to_string(&config_path) {
+                    Ok(content) => match config::parse_toml(&content) {
+                        Ok(raw) => Some(raw),
+                        Err(e) => {
+                            eprintln!(
+                                "Error: config at {} could not be parsed: {e}",
+                                config_path.display()
+                            );
+                            process::exit(1);
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("Error: could not read {}: {e}", config_path.display());
+                        process::exit(1);
+                    }
+                }
+            } else {
+                None
+            };
+
+            let has_servers = existing
+                .as_ref()
+                .is_some_and(|e| e.servers.as_ref().is_some_and(|s| !s.is_empty()));
+
+            if !has_servers {
+                // No existing config or empty — run wizard for onboarding
+                if let Err(e) = wizard::run_wizard(config.as_deref(), env_file.as_deref(), v, false)
+                {
+                    eprintln!("Error: {e}");
+                    process::exit(1);
+                }
+            } else {
+                // Config exists — ask what to do
+                let choice = inquire::Select::new(
+                    "Configuration found. What would you like to do?",
+                    vec!["Edit existing config", "Set up a new server"],
+                )
+                .prompt();
+
+                match choice {
+                    Ok("Edit existing config") => {
+                        let existing = existing.unwrap();
+                        let server_labels: Vec<String> = existing
+                            .servers
+                            .as_ref()
+                            .map(|s| s.keys().cloned().collect())
+                            .unwrap_or_default();
+
+                        let env_keys = match tui::io::load_env_keys(&env_path, &server_labels) {
+                            Ok(keys) => keys,
+                            Err(e) => {
+                                eprintln!("Error: could not read {}: {e}", env_path.display());
+                                process::exit(1);
+                            }
+                        };
+
+                        if let Err(e) = tui::run_editor(existing, env_keys, config_path, env_path) {
+                            eprintln!("Error: {e}");
+                            process::exit(1);
+                        }
+                    }
+                    Ok("Set up a new server") => {
+                        if let Err(e) =
+                            wizard::run_wizard(config.as_deref(), env_file.as_deref(), v, true)
+                        {
+                            eprintln!("Error: {e}");
+                            process::exit(1);
+                        }
+                    }
+                    Ok(_) => unreachable!(),
+                    Err(
+                        inquire::InquireError::OperationCanceled
+                        | inquire::InquireError::OperationInterrupted,
+                    ) => {
+                        // User cancelled — silent exit
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        process::exit(1);
+                    }
+                }
             }
         }
     }

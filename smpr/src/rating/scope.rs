@@ -1,14 +1,6 @@
 use crate::rating::{LibraryScope, RatingError};
 use crate::server::types::VirtualFolder;
-
-/// Extract the leaf directory name from a path (handles both / and \ separators).
-fn location_leaf(path: &str) -> &str {
-    let trimmed = path.trim_end_matches(['/', '\\']);
-    match trimmed.rfind(['/', '\\']) {
-        Some(pos) => &trimmed[pos + 1..],
-        None => trimmed,
-    }
-}
+use crate::util::location_leaf;
 
 /// Pure library/location scoping logic. Testable without a server.
 ///

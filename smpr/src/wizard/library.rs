@@ -1,33 +1,26 @@
 use super::{WizardError, from_inquire};
+use crate::config::defaults::DEFAULT_G_GENRES;
 use crate::server::MediaServerClient;
 
-/// Result of the genre selection step.
-pub struct GenreConfig {
-    pub genres: Vec<String>,
+/// Discovered library with its locations.
+pub struct DiscoveredLibrary {
+    pub name: String,
+    pub locations: Vec<String>,
 }
 
-/// Recommended G-genres for first-time setup.
-const DEFAULT_G_GENRES: &[&str] = &[
-    "Ambient",
-    "Classical",
-    "Electronic",
-    "Instrumental",
-    "Jazz",
-    "Lo-fi",
-    "Meditation",
-    "New Age",
-    "Opera",
-    "Orchestral",
-    "Piano",
-    "Soundtrack",
-    "World Music",
-];
+/// Result of the library & genre selection step.
+pub struct GenreConfig {
+    pub genres: Vec<String>,
+    pub libraries: Vec<DiscoveredLibrary>,
+}
 
 pub fn prompt_library_and_genres(
     client: &MediaServerClient,
     verbose: bool,
 ) -> Result<GenreConfig, WizardError> {
     println!("\n── Library & Genre Discovery ──\n");
+
+    let mut discovered_libraries = Vec::new();
 
     match client.discover_libraries() {
         Ok(libs) => {
@@ -44,6 +37,10 @@ pub fn prompt_library_and_genres(
                     if !lib.locations.is_empty() {
                         println!("    {} locations: {}", lib.name, lib.locations.join(", "));
                     }
+                    discovered_libraries.push(DiscoveredLibrary {
+                        name: lib.name.clone(),
+                        locations: lib.locations.clone(),
+                    });
                 }
             }
         }
@@ -74,7 +71,10 @@ pub fn prompt_library_and_genres(
         _ => scan_and_select_genres(client, verbose)?,
     };
 
-    Ok(GenreConfig { genres })
+    Ok(GenreConfig {
+        genres,
+        libraries: discovered_libraries,
+    })
 }
 
 fn scan_and_select_genres(

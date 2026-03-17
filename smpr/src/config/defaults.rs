@@ -21,3 +21,13 @@ pub const FALSE_POSITIVES: &[&str] = &[
     "succumb",
     "accumulate",
 ];
+
+pub const DEFAULT_G_GENRES: &[&str] = &[
+    "Ambient",
+    "Classical",
+    "Instrumental",
+    "Meditation",
+    "New Age",
+    "Orchestral",
+    "Piano",
+];
