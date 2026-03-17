@@ -20,7 +20,7 @@ pub fn render_server_list(state: &AppState, area: Rect, buf: &mut Buffer) {
     let mut y = area.y;
 
     for (i, (label, server)) in entries.iter().enumerate() {
-        let card_height = 5u16;
+        let card_height = 6u16;
         if y + card_height > area.y + area.height {
             break;
         }
@@ -90,24 +90,32 @@ pub fn render_server_list(state: &AppState, area: Rect, buf: &mut Buffer) {
             })
             .unwrap_or_else(|| "(not set)".to_string());
 
-        let libs = server
-            .libraries
-            .as_ref()
-            .map(|l| l.keys().cloned().collect::<Vec<_>>().join(", "))
-            .unwrap_or_else(|| "(none)".to_string());
-
         let is_editing = is_selected && state.mode == Mode::Editing;
 
-        render_field(
-            buf,
-            inner.x,
-            inner.y,
-            inner.width,
-            "URL",
-            url,
-            is_editing && state.server_state.editing_field == Some(ServerField::Url),
-            &state.server_state.text_input.text,
-        );
+        // Show label input when adding a new server (editing_field == None)
+        if is_editing && state.server_state.editing_field.is_none() {
+            render_field(
+                buf,
+                inner.x,
+                inner.y,
+                inner.width,
+                "Label",
+                "",
+                true,
+                &state.server_state.text_input.text,
+            );
+        } else {
+            render_field(
+                buf,
+                inner.x,
+                inner.y,
+                inner.width,
+                "URL",
+                url,
+                is_editing && state.server_state.editing_field == Some(ServerField::Url),
+                &state.server_state.text_input.text,
+            );
+        }
         if inner.height > 1 {
             render_field(
                 buf,
@@ -121,11 +129,16 @@ pub fn render_server_list(state: &AppState, area: Rect, buf: &mut Buffer) {
             );
         }
         if inner.height > 2 {
-            let lib_line = Line::from(vec![
-                Span::styled("  Libs    ", Style::default().fg(Color::DarkGray)),
-                Span::styled(libs, Style::default().fg(Color::White)),
-            ]);
-            buf.set_line(inner.x, inner.y + 2, &lib_line, inner.width);
+            render_field(
+                buf,
+                inner.x,
+                inner.y + 2,
+                inner.width,
+                "Type",
+                type_str,
+                is_editing && state.server_state.editing_field == Some(ServerField::ServerType),
+                &state.server_state.text_input.text,
+            );
         }
 
         y += card_height + 1;

@@ -83,8 +83,8 @@ pub fn run_editor(
     widgets::force_tree::init_force_state(&mut state);
 
     enable_raw_mode()?;
+    let _guard = TerminalGuard; // Drop restores terminal even if EnterAlternateScreen fails
     execute!(std::io::stdout(), EnterAlternateScreen)?;
-    let _guard = TerminalGuard;
 
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -116,7 +116,7 @@ pub fn run_editor(
                                 state.quit_requested = false;
                                 continue;
                             }
-                            if let Err(e) = save(&state) {
+                            if let Err(e) = save(&mut state) {
                                 state.error_message = Some(format!("Save failed: {e}"));
                                 state.quit_requested = false;
                                 continue;
@@ -392,7 +392,7 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                 servers.insert(
                     label.clone(),
                     crate::config::RawServerConfig {
-                        url: Some(String::new()),
+                        url: None,
                         server_type: None,
                         libraries: None,
                     },
@@ -663,11 +663,13 @@ fn load_field_into_input(state: &mut AppState, label: &str) {
     state.server_state.text_input.set(&text);
 }
 
-fn save(state: &AppState) -> Result<(), TuiError> {
+fn save(state: &mut AppState) -> Result<(), TuiError> {
     // Save .env first — if this fails, the config file remains untouched.
     // Both use atomic writes (write to tmp, then rename).
     io::save_env(&state.env_keys, &state.initial_labels, &state.env_path)?;
     io::save_config(&state.config, &state.config_path)?;
+    // Update initial_labels to track current servers for .env deletion tracking
+    state.initial_labels = state.env_keys.keys().cloned().collect();
     Ok(())
 }
 
