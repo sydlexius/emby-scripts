@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 pub struct RawConfig {
     pub servers: Option<BTreeMap<String, RawServerConfig>>,
     pub detection: Option<RawDetection>,
@@ -18,7 +18,7 @@ pub struct RawConfig {
     pub report: Option<RawReport>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct RawServerConfig {
     pub url: Option<String>,
     #[serde(rename = "type")]
@@ -26,18 +26,18 @@ pub struct RawServerConfig {
     pub libraries: Option<BTreeMap<String, RawLibraryConfig>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct RawLibraryConfig {
     pub force_rating: Option<String>,
     pub locations: Option<BTreeMap<String, RawLocationConfig>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct RawLocationConfig {
     pub force_rating: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 pub struct RawDetection {
     pub r: Option<RawWordList>,
     pub pg13: Option<RawWordList>,
@@ -45,28 +45,28 @@ pub struct RawDetection {
     pub g_genres: Option<RawGenres>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct RawWordList {
     pub stems: Option<Vec<String>>,
     pub exact: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct RawIgnore {
     pub false_positives: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct RawGenres {
     pub genres: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct RawGeneral {
     pub overwrite: Option<bool>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct RawReport {
     pub output_path: Option<String>,
 }
