@@ -199,7 +199,10 @@ pub fn run_wizard(
     let (genre_config, detection_config, prefs) = if adding_server {
         // Adding a server — skip detection/genre/preference prompts
         (
-            library::GenreConfig { genres: vec![] },
+            library::GenreConfig {
+                genres: vec![],
+                libraries: vec![],
+            },
             detection::DetectionAdditions {
                 extra_r_stems: vec![],
                 extra_r_exact: vec![],

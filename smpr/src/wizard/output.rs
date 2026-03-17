@@ -4,8 +4,8 @@ use super::library::GenreConfig;
 use super::preferences::Preferences;
 use super::server::ServerInfo;
 use crate::config::{
-    RawConfig, RawDetection, RawGeneral, RawGenres, RawIgnore, RawServerConfig, RawWordList,
-    defaults,
+    RawConfig, RawDetection, RawGeneral, RawGenres, RawIgnore, RawLibraryConfig, RawLocationConfig,
+    RawServerConfig, RawWordList, defaults,
 };
 use std::path::Path;
 
@@ -64,12 +64,42 @@ fn build_raw_config(
         crate::config::ServerType::Emby => "emby",
         crate::config::ServerType::Jellyfin => "jellyfin",
     };
+    // Build library entries from discovered libraries
+    let libraries = if genres.libraries.is_empty() {
+        None
+    } else {
+        let mut libs = std::collections::BTreeMap::new();
+        for lib in &genres.libraries {
+            let locations = if lib.locations.is_empty() {
+                None
+            } else {
+                let mut locs = std::collections::BTreeMap::new();
+                for loc_path in &lib.locations {
+                    let loc_name = std::path::Path::new(loc_path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| loc_path.clone());
+                    locs.insert(loc_name, RawLocationConfig { force_rating: None });
+                }
+                Some(locs)
+            };
+            libs.insert(
+                lib.name.clone(),
+                RawLibraryConfig {
+                    force_rating: None,
+                    locations,
+                },
+            );
+        }
+        Some(libs)
+    };
+
     servers.insert(
         server.label.clone(),
         RawServerConfig {
             url: Some(server.url.clone()),
             server_type: Some(server_type_str.to_string()),
-            libraries: None,
+            libraries,
         },
     );
 
@@ -192,6 +222,7 @@ mod tests {
         };
         let genres = GenreConfig {
             genres: vec!["Classical".to_string(), "Ambient".to_string()],
+            libraries: vec![],
         };
         let detection = DetectionAdditions {
             extra_r_stems: vec!["newword".to_string()],
@@ -255,7 +286,10 @@ overwrite = true
             label: "home-jellyfin".to_string(),
             server_type: ServerType::Jellyfin,
         };
-        let genres = GenreConfig { genres: vec![] };
+        let genres = GenreConfig {
+            genres: vec![],
+            libraries: vec![],
+        };
         let detection = DetectionAdditions {
             extra_r_stems: vec![],
             extra_r_exact: vec![],
@@ -300,7 +334,10 @@ overwrite = true
             label: "home-emby".to_string(),
             server_type: ServerType::Emby,
         };
-        let genres = GenreConfig { genres: vec![] };
+        let genres = GenreConfig {
+            genres: vec![],
+            libraries: vec![],
+        };
         let detection = DetectionAdditions {
             extra_r_stems: vec![],
             extra_r_exact: vec![],
