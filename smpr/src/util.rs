@@ -65,4 +65,34 @@ mod tests {
         let result = strip_lrc_tags(input);
         assert_eq!(result, "Line one\nPlain line\nLine three");
     }
+
+    #[test]
+    fn location_leaf_simple_path() {
+        assert_eq!(super::location_leaf("/mnt/music/Classical"), "Classical");
+    }
+
+    #[test]
+    fn location_leaf_windows_path() {
+        assert_eq!(super::location_leaf("C:\\Music\\Classical"), "Classical");
+    }
+
+    #[test]
+    fn location_leaf_trailing_slash() {
+        assert_eq!(super::location_leaf("/mnt/music/Classical/"), "Classical");
+    }
+
+    #[test]
+    fn location_leaf_no_separator() {
+        assert_eq!(super::location_leaf("Classical"), "Classical");
+    }
+
+    #[test]
+    fn location_leaf_empty_returns_original() {
+        assert_eq!(super::location_leaf(""), "");
+    }
+
+    #[test]
+    fn location_leaf_only_slashes_returns_original() {
+        assert_eq!(super::location_leaf("///"), "///");
+    }
 }

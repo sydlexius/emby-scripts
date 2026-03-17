@@ -1,4 +1,5 @@
 use super::{WizardError, from_inquire};
+use crate::config::defaults::DEFAULT_G_GENRES;
 use crate::server::MediaServerClient;
 
 /// Discovered library with its locations.
@@ -12,18 +13,6 @@ pub struct GenreConfig {
     pub genres: Vec<String>,
     pub libraries: Vec<DiscoveredLibrary>,
 }
-
-/// Recommended G-genres for first-time setup.
-/// Only genres that are inherently instrumental / guaranteed clean.
-pub const DEFAULT_G_GENRES: &[&str] = &[
-    "Ambient",
-    "Classical",
-    "Instrumental",
-    "Meditation",
-    "New Age",
-    "Orchestral",
-    "Piano",
-];
 
 pub fn prompt_library_and_genres(
     client: &MediaServerClient,

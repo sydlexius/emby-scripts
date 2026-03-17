@@ -1,5 +1,5 @@
+use crate::config::defaults::DEFAULT_G_GENRES;
 use crate::tui::app::{AppState, GenrePickerState, Mode};
-use crate::wizard::library::DEFAULT_G_GENRES;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -261,7 +261,8 @@ fn render_available_column(state: &AppState, area: Rect, buf: &mut Buffer) {
     }
 
     let mut list_state = ListState::default();
-    list_state.select(Some(state.genre_state.cursor));
+    let max_idx = items.len().saturating_sub(1);
+    list_state.select(Some(state.genre_state.cursor.min(max_idx)));
 
     let list = List::new(items).highlight_style(Style::default().bg(Color::DarkGray));
     StatefulWidget::render(list, list_area, buf, &mut list_state);

@@ -556,6 +556,13 @@ fn handle_action(state: &mut app::AppState, action: keymap::Action) {
                 state.detection_state.text_input.insert_char(c);
             } else if state.section == Section::Servers && state.mode == Mode::Editing {
                 state.server_state.text_input.insert_char(c);
+            } else if state.section == Section::Genres && state.mode == Mode::FullScreen {
+                // Auto-activate filter on keypress
+                state.genre_state.filter_active = true;
+                state.genre_state.filter.clear();
+                state.genre_state.filter.push(c);
+                state.genre_state.cursor = 0;
+                state.mode = Mode::Filtering;
             } else if state.section == Section::Genres && state.mode == Mode::Filtering {
                 state.genre_state.filter.push(c);
                 state.genre_state.cursor = 0;
