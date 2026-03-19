@@ -31,7 +31,8 @@ detection (R / PG-13), and sets `OfficialRating` on matching audio tracks.
 
 ## Known patterns -- do not flag
 
-- `#[ignore]` on UAT/integration tests is intentional (require live server)
+- UAT/integration tests are gated by `SMPR_UAT_TEST=1` env var with early return,
+  not `#[ignore]`. This pattern is intentional.
 - `dotenvy::from_path` errors are intentionally ignored for auto-discovered .env files
 - `--test-threads=1` is required, not a performance concern
 
